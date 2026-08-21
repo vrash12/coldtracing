@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>ColdTrace Live Monitor</title>
+
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+
+<style>
+body{
+    font-family:Arial,sans-serif;
+    background:#f4f7fb;
+    margin:0;
+    padding:20px;
+}
+
+h1{
+    color:#0f172a;
+}
+
+.status{
+    margin-bottom:20px;
+    font-weight:bold;
+}
+
+.grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+    gap:15px;
+}
+
+.card{
+    background:white;
+    border-radius:12px;
+    padding:20px;
+    box-shadow:0 2px 10px rgba(0,0,0,.08);
+}
+
+.card h3{
+    margin:0 0 10px;
+    color:#64748b;
+    font-size:14px;
+}
+
+.value{
+    font-size:28px;
+    font-weight:bold;
+    color:#0f172a;
+}
+
+.temp{
+    color:#2563eb;
+}
+
+.gps{
+    color:#16a34a;
+}
+
+pre{
+    background:#111827;
+    color:#00ff88;
+    padding:15px;
+    border-radius:10px;
+    overflow:auto;
+}
+</style>
+</head>
+<body>
+
+<h1>🚚 ColdTrace Live Telemetry</h1>
+
+<div class="status">
+    MQTT Status:
+    <span id="status">Disconnected</span>
+</div>
+
+<div class="grid">
+
+    <div class="card">
+        <h3>Device</h3>
+        <div class="value" id="device">
+            ---
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>Temperature</h3>
+        <div class="value temp" id="temperature">
+            -- °C
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>Latitude</h3>
+        <div class="value gps" id="latitude">
+            ---
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>Longitude</h3>
+        <div class="value gps" id="longitude">
+            ---
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>GPS Status</h3>
+        <div class="value" id="gpsStatus">
+            ---
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>Satellites</h3>
+        <div class="value" id="satellites">
+            ---
+        </div>
+    </div>
+
+</div>
+
+<br>
+
+<div class="card">
+    <h3>Raw JSON Data</h3>
+
+    <pre id="rawData">
+Waiting for telemetry...
+    </pre>
+</div>
+
+<script>
+
+// =====================================
+// HIVEMQ CLOUD SETTINGS
+// =====================================
+
+const broker =
+'wss://9d73804b71954f829dd579d791128b63.s1.eu.hivemq.cloud:8884/mqtt';
+
+const options = {
+    username: 'vanrodolf',
+    password: 'Vanrodolf123.',
+    clean: true,
+    reconnectPeriod: 3000,
+    clientId: 'coldtrace-web-' + Math.random().toString(16).substring(2,10)
+};
+
+// =====================================
+// CONNECT
+// =====================================
+
+const client = mqtt.connect(broker, options);
+
+const status = document.getElementById('status');
+
+client.on('connect', () => {
+
+    status.innerHTML = 'Connected';
+    status.style.color = 'green';
+
+    console.log('Connected');
+
+    client.subscribe('coldtrace/trucks/+/telemetry');
+});
+
+client.on('reconnect', () => {
+    status.innerHTML = 'Reconnecting...';
+    status.style.color = 'orange';
+});
+
+client.on('error', (err) => {
+    console.error(err);
+
+    status.innerHTML = 'Connection Error';
+    status.style.color = 'red';
+});
+
+// =====================================
+// TELEMETRY
+// =====================================
+
+client.on('message', (topic, message) => {
+
+    try{
+
+        const data = JSON.parse(message.toString());
+
+        document.getElementById('device').innerHTML =
+            data.device_code ?? 'N/A';
+
+        document.getElementById('temperature').innerHTML =
+            (data.temperature ?? '--') + ' °C';
+
+        document.getElementById('latitude').innerHTML =
+            data.latitude ?? 'N/A';
+
+        document.getElementById('longitude').innerHTML =
+            data.longitude ?? 'N/A';
+
+        document.getElementById('gpsStatus').innerHTML =
+            data.gps_valid ? 'VALID' : 'NO SIGNAL';
+
+        document.getElementById('satellites').innerHTML =
+            data.satellites ?? 0;
+
+        document.getElementById('rawData').textContent =
+            JSON.stringify(data, null, 2);
+
+    }
+    catch(error){
+
+        console.error(error);
+
+    }
+
+});
+
+</script>
+
+</body>
+</html>

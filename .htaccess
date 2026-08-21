@@ -1,0 +1,9 @@
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Hostinger serves this project from public_html. Internally route every
+    # request through Laravel's public directory without exposing /public in
+    # the browser URL.
+    RewriteCond %{REQUEST_URI} !^/public/
+    RewriteRule ^(.*)$ public/$1 [L]
+</IfModule>

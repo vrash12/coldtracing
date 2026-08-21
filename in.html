@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ColdTrace Fleet Dashboard</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #e9ecef;
+            color: #343a40;
+            margin: 0;
+            padding: 20px;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .status {
+            text-align: center;
+            padding: 12px;
+            margin-bottom: 30px;
+            border-radius: 6px;
+            font-weight: bold;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .status.disconnected { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .status.connected { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        
+        .dashboard {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 25px;
+            justify-content: center;
+        }
+        .card {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 6px 12px rgba(0,0,0,0.08);
+            width: 320px;
+            transition: transform 0.2s;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+        }
+        .card h2 {
+            margin-top: 0;
+            font-size: 1.4rem;
+            color: #343a40;
+            border-bottom: 2px solid #f0f0f0;
+            padding-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        /* --- NEW HUGE TEMPERATURE DISPLAY --- */
+        .primary-temp {
+            text-align: center;
+            font-size: 3.5rem;
+            font-weight: bold;
+            margin: 15px 0;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
+        }
+        .temp-alert { color: #dc3545; } /* Red for warm */
+        .temp-good { color: #0d6efd; }  /* Blue for cold */
+        .temp-label {
+            text-align: center;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            color: #6c757d;
+            font-weight: bold;
+            letter-spacing: 1px;
+            margin-top: -10px;
+            margin-bottom: 20px;
+        }
+        /* ------------------------------------ */
+
+        .data-section {
+            margin-top: 15px;
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        .section-title {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            color: #6c757d;
+            font-weight: bold;
+            margin-bottom: 10px;
+            letter-spacing: 1px;
+        }
+        .data-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 8px 0;
+            font-size: 0.95rem;
+        }
+        .value {
+            font-weight: bold;
+            color: #212529;
+        }
+        .timestamp {
+            font-size: 0.85rem;
+            color: #adb5bd;
+            text-align: right;
+            margin-top: 20px;
+            border-top: 1px solid #f0f0f0;
+            padding-top: 10px;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
+</head>
+<body>
+
+    <div class="header">
+        <h1>❄️ ColdTrace Fleet Telemetry</h1>
+    </div>
+
+    <div id="connection-status" class="status disconnected">
+        Connecting to HiveMQ Cloud Broker...
+    </div>
+
+    <div class="dashboard" id="dashboard">
+        </div>
+
+    <script>
+        // =====================================================
+        // 1. HIVEMQ CLOUD SETTINGS (WebSockets)
+        // =====================================================
+        const MQTT_HOST = "9d73804b71954f829dd579d791128b63.s1.eu.hivemq.cloud";
+        const MQTT_PORT = 8884; 
+        const MQTT_USER = "vanrodolf";
+        const MQTT_PASS = "Vanrodolf123.";
+        
+        const MQTT_TOPIC = "coldtrace/trucks/+/telemetry"; 
+        const clientId = "web-dashboard-" + Math.random().toString(16).substr(2, 8);
+
+        // =====================================================
+        // 2. INITIALIZE MQTT CLIENT
+        // =====================================================
+        const client = new Paho.Client(MQTT_HOST, MQTT_PORT, clientId);
+
+        client.onConnectionLost = onConnectionLost;
+        client.onMessageArrived = onMessageArrived;
+
+        const options = {
+            useSSL: true,
+            userName: MQTT_USER,
+            password: MQTT_PASS,
+            onSuccess: onConnect,
+            onFailure: onFailure
+        };
+
+        client.connect(options);
+
+        // =====================================================
+        // 3. MQTT CONNECTION CALLBACKS
+        // =====================================================
+        function onConnect() {
+            const statusDiv = document.getElementById("connection-status");
+            statusDiv.textContent = "🟢 Live - Connected to HiveMQ Cloud";
+            statusDiv.className = "status connected";
+            client.subscribe(MQTT_TOPIC);
+        }
+
+        function onFailure(responseObject) {
+            const statusDiv = document.getElementById("connection-status");
+            statusDiv.textContent = "🔴 Connection Failed: " + responseObject.errorMessage;
+        }
+
+        function onConnectionLost(responseObject) {
+            if (responseObject.errorCode !== 0) {
+                const statusDiv = document.getElementById("connection-status");
+                statusDiv.textContent = "🔴 Connection Lost: " + responseObject.errorMessage;
+                statusDiv.className = "status disconnected";
+            }
+        }
+
+        // =====================================================
+        // 4. HANDLE INCOMING DATA
+        // =====================================================
+        function onMessageArrived(message) {
+            try {
+                const payload = JSON.parse(message.payloadString);
+                updateDashboardUI(payload);
+            } catch (error) {
+                console.error("Failed to parse the JSON payload:", error);
+            }
+        }
+
+        // =====================================================
+        // 5. UPDATE THE HTML DASHBOARD
+        // =====================================================
+        function updateDashboardUI(data) {
+            const dashboard = document.getElementById("dashboard");
+            const deviceId = data.device_code || "Unknown Device";
+            
+            let card = document.getElementById("card-" + deviceId);
+            
+            if (!card) {
+                card = document.createElement("div");
+                card.id = "card-" + deviceId;
+                card.className = "card";
+                dashboard.appendChild(card);
+            }
+            
+            // Format Temperature
+            const tempValue = data.temperature !== null ? data.temperature.toFixed(1) : "--";
+            // If temp is above 5 degrees, it turns red. Otherwise, it stays blue.
+            const tempClass = data.temperature > 5 ? "temp-alert" : "temp-good"; 
+            
+            // Format GPS
+            const lat = data.latitude !== null ? data.latitude : "Searching...";
+            const lng = data.longitude !== null ? data.longitude : "Searching...";
+            const speed = data.speed_kmph !== null ? data.speed_kmph : "0.00";
+            const sats = data.satellites !== null ? data.satellites : "0";
+            const gpsStatusColor = data.gps_valid ? "green" : "red";
+            const gpsStatusText = data.gps_valid ? "Locked" : "No Fix";
+
+            card.innerHTML = `
+                <h2>🚚 ${deviceId}</h2>
+                
+                <div class="primary-temp ${tempClass}">${tempValue}°C</div>
+                <div class="temp-label">Current Cargo Temp</div>
+
+                <div class="data-section">
+                    <div class="section-title">GPS & Tracking</div>
+                    <div class="data-row">
+                        <span>Speed:</span>
+                        <span class="value">${speed} km/h</span>
+                    </div>
+                    <div class="data-row">
+                        <span>Location:</span>
+                        <span class="value" style="font-size: 0.85rem;">${lat}, ${lng}</span>
+                    </div>
+                    <div class="data-row">
+                        <span>Satellites:</span>
+                        <span class="value">${sats}</span>
+                    </div>
+                    <div class="data-row">
+                        <span>Signal:</span>
+                        <span class="value" style="color: ${gpsStatusColor};">${gpsStatusText}</span>
+                    </div>
+                </div>
+
+                <div class="timestamp">
+                    Last sync: ${new Date().toLocaleTimeString()}
+                </div>
+            `;
+        }
+    </script>
+</body>
+</html>
