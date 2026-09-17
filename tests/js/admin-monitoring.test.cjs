@@ -10,12 +10,12 @@ function environment() {
         return {textContent: '', innerHTML: '', value: '', dataset: {}, style: {}, hidden: true,
             classList: {add() {}, remove() {}}, appendChild() {}, addEventListener() {}};
     }
-    const document = {hidden: false, createElement: element, querySelectorAll: () => [],
+    const document = {hidden: false, createElement: element, querySelectorAll: () => [], addEventListener() {},
         getElementById(id) { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); }};
     class MapView { fitBounds() {} setCenter() {} setZoom() {} panTo() {} }
     class Marker { constructor(options) { Object.assign(this, options); } addListener() {} }
     class Bounds { extend() {} }
-    class InfoWindow { constructor() {} setContent() {} open() {} }
+    class InfoWindow { close() {} constructor() {} setContent() {} open() {} }
     const context = vm.createContext({document, console, Map, Date: class extends Date {static now() {return now;}},
         setInterval() {}, clearInterval() {}, fetch: async () => ({ok:true, json:async()=>({data: structuredClone(fleet)})}),
         google: {maps: {LatLngBounds: Bounds, InfoWindow, importLibrary: async name => {
@@ -33,6 +33,7 @@ function environment() {
     context.window = context;
     context.addEventListener = () => {};
     context.createColdTraceTruckMarker = number => ({number});
+    vm.runInContext(script('resources/views/components/maps/live-location.blade.php').replace(/@json\([^\n]+\)/, '30000'), context);
     vm.runInContext(main, context);
     vm.runInContext(script('resources/views/maps/live-feed.blade.php'), context);
     return {run: code => vm.runInContext(code, context), elements, advance: ms => {now += ms;}};
@@ -51,7 +52,7 @@ test('idle fleet receives a live marker without trips or the Routes library', as
     assert.equal(e.run('trips[3].latestTelemetry.temperature'),0);
     await e.run('refreshFleetSnapshot()');
     assert.equal(e.run('truckMarkers.size'),1, 'empty stored snapshot must not erase live GPS');
-    e.advance(121000);
+    e.advance(30000);
     e.run('renderFleet()');
     assert.equal(e.run('truckMarkers.size'),0, 'old GPS must expire');
 });

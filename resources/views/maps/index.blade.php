@@ -506,7 +506,7 @@
 
     function getBestTruckPosition(trip) {
         const time = Date.parse(trip.gps?.recorded_at);
-        if (!Number.isFinite(time) || Date.now() - time > 120000 || time - Date.now() > 30000) return null;
+        if (!ColdTraceLocation.fresh(time)) return null;
         return getLatLng(trip.gps);
     }
 

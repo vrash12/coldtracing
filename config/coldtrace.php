@@ -13,6 +13,7 @@ foreach (range(1001, 1006) as $number) {
 }
 
 return [
+    'gps_timeout_seconds' => 30,
     'initial_admin' => [
         'name' => env('COLDTRACE_INITIAL_ADMIN_NAME'),
         'email' => env('COLDTRACE_INITIAL_ADMIN_EMAIL'),

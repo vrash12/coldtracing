@@ -18,8 +18,6 @@ use Illuminate\Support\Facades\Schema;
 
 class OrderController extends Controller
 {
-    private const MAX_GPS_AGE_SECONDS = 120;
-
     /**
      * Orders with these statuses are included in the driver's optimized route.
      * Delivered and cancelled orders are not included because they no longer need navigation.
@@ -107,6 +105,7 @@ class OrderController extends Controller
         $currentLat = $gpsState['latitude'];
         $currentLng = $gpsState['longitude'];
         $gpsAgeSeconds = $gpsState['age_seconds'];
+        $gpsRecordedAt = $gpsState['recorded_at'];
         $gpsSource = $gpsState['source'];
 
         /*
@@ -148,6 +147,7 @@ class OrderController extends Controller
             'currentLat',
             'currentLng',
             'gpsAgeSeconds',
+            'gpsRecordedAt',
             'gpsSource',
             'expectedDeviceCode',
             'expectedTopic',
@@ -170,8 +170,7 @@ class OrderController extends Controller
             'orderItems.product',
         ]);
 
-        $telemetryTrip = $this->findTelemetryTripForOrder($order)
-            ?: $this->findLatestTelemetryTripForDriver();
+        $telemetryTrip = $this->findTelemetryTripForOrder($order);
 
         $latestTelemetry = $telemetryTrip?->latestTelemetry;
 
@@ -190,6 +189,7 @@ class OrderController extends Controller
         $currentLat = $gpsState['latitude'];
         $currentLng = $gpsState['longitude'];
         $gpsAgeSeconds = $gpsState['age_seconds'];
+        $gpsRecordedAt = $gpsState['recorded_at'];
         $gpsSource = $gpsState['source'];
 
         $destination = $order->delivery_lat && $order->delivery_lng
@@ -226,6 +226,7 @@ class OrderController extends Controller
             'currentLat',
             'currentLng',
             'gpsAgeSeconds',
+            'gpsRecordedAt',
             'gpsSource',
             'mapsUrl',
             'currentToDeliveryMapsUrl',
@@ -477,14 +478,14 @@ class OrderController extends Controller
      * reading must not erase the last valid position, while an old position
      * must not be presented as the truck's current location.
      *
-     * @return array{available: bool, latitude: ?float, longitude: ?float, age_seconds: ?int, source: ?string}
+     * @return array{available: bool, latitude: ?float, longitude: ?float, age_seconds: ?int, recorded_at: ?string, source: ?string}
      */
     private function freshGpsState(?Trip $trip): array
     {
         $gpsTelemetry = $trip?->latestGpsTelemetry;
         $recordedAt = $gpsTelemetry?->recorded_at;
         $ageSeconds = $recordedAt
-            ? (int) abs(now()->diffInSeconds($recordedAt))
+            ? (int) $recordedAt->diffInSeconds(now(), false)
             : null;
         $coordinatesAreValid = $gpsTelemetry
             && $gpsTelemetry->latitude !== null
@@ -500,14 +501,17 @@ class OrderController extends Controller
                 && (float) $gpsTelemetry->longitude === 0.0
             );
         $available = $coordinatesAreValid
+            && in_array($trip?->status, ['pending', 'in_progress'], true)
             && $ageSeconds !== null
-            && $ageSeconds <= self::MAX_GPS_AGE_SECONDS;
+            && $ageSeconds >= -30
+            && $ageSeconds < (int) config('coldtrace.gps_timeout_seconds', 30);
 
         return [
             'available' => $available,
             'latitude' => $available ? (float) $gpsTelemetry->latitude : null,
             'longitude' => $available ? (float) $gpsTelemetry->longitude : null,
             'age_seconds' => $ageSeconds,
+            'recorded_at' => $recordedAt?->toIso8601String(),
             'source' => $available && str_starts_with((string) $gpsTelemetry->device?->device_code, 'SIM-')
                 ? 'software'
                 : ($available ? 'esp32' : null),
@@ -562,6 +566,7 @@ class OrderController extends Controller
             'success' => true,
             'data' => [
                 'trip_id' => $trip->id,
+                'trip_status' => $trip->status,
                 'device_code' => $latest->device?->device_code,
                 'temperature_source' => $temperatureSource,
                 'temperature' => $latest->temperature !== null
@@ -574,6 +579,7 @@ class OrderController extends Controller
                 'longitude' => $gpsState['longitude'],
                 'location_source' => $gpsState['source'],
                 'gps_age_seconds' => $gpsState['age_seconds'],
+                'gps_recorded_at' => $gpsState['recorded_at'],
                 'mkt_value' => $latest->mkt_value !== null
                     ? (float) $latest->mkt_value
                     : null,
@@ -585,6 +591,6 @@ class OrderController extends Controller
                 'temperature_class' => $temperatureState['class'],
                 'recorded_at' => $latest->recorded_at?->toIso8601String(),
             ],
-        ]);
+        ])->header('Cache-Control', 'no-store');
     }
 }

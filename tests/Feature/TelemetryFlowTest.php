@@ -160,6 +160,45 @@ class TelemetryFlowTest extends TestCase
         ]);
     }
 
+    public function test_saved_gps_expires_without_a_new_fix_and_temperature_updates_do_not_extend_it(): void
+    {
+        $context = $this->createActiveDeliveryContext();
+        $this->freezeTime();
+        $this->postJson('/api/telemetry', [
+            'device_code' => $context['device']->device_code,
+            'temperature' => 4.5, 'latitude' => 14.676, 'longitude' => 121.0437,
+            'gps_valid' => true, 'satellites' => 8, 'hdop' => 1,
+        ])->assertCreated();
+        $recordedAt = now()->toIso8601String();
+        $this->travel(20)->seconds();
+        $this->postJson('/api/telemetry', [
+            'device_code' => $context['device']->device_code, 'temperature' => 4.6,
+        ])->assertCreated();
+        $this->actingAs($context['driver'])->getJson(route('driver.orders.telemetry.latest', $context['order']))
+            ->assertOk()->assertJsonPath('data.latitude', 14.676)
+            ->assertJsonPath('data.gps_recorded_at', $recordedAt);
+        $this->travel(10)->seconds();
+        $this->getJson(route('driver.orders.telemetry.latest', $context['order']))
+            ->assertOk()->assertJsonPath('data.latitude', null)->assertJsonPath('data.longitude', null)
+            ->assertJsonPath('data.temperature', 4.6);
+        $this->get(route('driver.orders.show', $context['order']))->assertOk()->assertViewHas('hasCurrentGps', false);
+    }
+
+    public function test_closed_trip_keeps_its_history_without_a_live_marker(): void
+    {
+        $context = $this->createActiveDeliveryContext();
+        $this->postJson('/api/telemetry', [
+            'device_code' => $context['device']->device_code,
+            'temperature' => 4.5, 'latitude' => 14.676, 'longitude' => 121.0437,
+            'gps_valid' => true,
+        ])->assertCreated();
+        $context['trip']->update(['status' => 'completed']);
+        $this->actingAs($context['driver'])->getJson(route('driver.orders.telemetry.latest', $context['order']))
+            ->assertOk()->assertJsonPath('data.trip_status', 'completed')
+            ->assertJsonPath('data.latitude', null)->assertJsonPath('data.temperature', 4.5);
+        $this->get(route('driver.orders.show', $context['order']))->assertOk()->assertViewHas('hasCurrentGps', false);
+    }
+
     public function test_driver_can_generate_continuous_software_telemetry_with_accurate_browser_location(): void
     {
         $context = $this->createActiveDeliveryContext();

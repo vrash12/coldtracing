@@ -242,13 +242,20 @@ order with an active trip cannot be deleted — cancel it first.
 
 ### Live monitoring
 
-A Google map of every pending and in-progress trip. Each marker carries the
-truck, cargo and its safe range, driver, receiver, origin and destination, and
-the latest reading: position, temperature with its Safe / Too Low / Too High
-status, humidity, remaining shelf life, and the time it was recorded.
+The fleet list includes every configured truck, including trucks without an
+active delivery. Select a truck to see its location, driver, delivery details,
+and available temperature and shelf-life readings.
 
-This page needs `GOOGLE_MAPS_API_KEY`. Trips whose devices have not reported a
-valid position yet appear without a live marker.
+On both the administrator and driver maps, a truck appears only while its
+location is recent. If the device is switched off, loses its connection, or
+stops sending a valid location, its marker disappears after 30 seconds without
+a fresh location. The page shows **No live GPS** and the truck returns
+automatically when fresh readings arrive. Keep the page open; no refresh is needed.
+
+Stopping **Use Device Location** removes that browser location immediately.
+Completed trips keep their saved readings, but their order page does not show
+a live truck marker. The fleet map can still show the same truck if its device
+is online for other work.
 
 ---
 

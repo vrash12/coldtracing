@@ -570,6 +570,23 @@
     const safeMaxTemp = @json($monitoredProduct?->max_temp !== null ? (float) $monitoredProduct->max_temp : null);
 
     let latestRslResult = null;
+    let detailGpsRecordedAt = ColdTraceLocation.time(@json($gpsRecordedAt ?? null));
+    let detailReadingRecordedAt = ColdTraceLocation.time(@json($latestTelemetry?->recorded_at?->toIso8601String()));
+
+    function clearDetailLocation() {
+        setText('liveGps', 'No live GPS');
+        setText('liveGpsStatus', 'Truck disconnected or GPS unavailable');
+        setText('liveLocationName', 'Waiting for live GPS');
+        setText('liveLocationCoords', 'Last location expired');
+        if (typeof clearCurrentGpsMarker === 'function') clearCurrentGpsMarker();
+    }
+    function expireDetailLocation() {
+        if (!ColdTraceLocation.fresh(detailGpsRecordedAt)) clearDetailLocation();
+        if (!ColdTraceLocation.fresh(detailReadingRecordedAt)) setTelemetryChip('Telemetry: No recent readings');
+    }
+    const detailLocationTimer = setInterval(expireDetailLocation, 1000);
+    document.addEventListener('visibilitychange', expireDetailLocation);
+    window.addEventListener('pagehide', () => clearInterval(detailLocationTimer));
 
     function setText(id, value) {
         const element = document.getElementById(id);
@@ -841,6 +858,22 @@
     let selectedRouteOriginalIndex = null;
     let AdvancedMarkerElementClass = null;
     let latestCurrentPosition = null;
+    let routeRequestVersion = 0;
+
+    function clearCurrentGpsMarker() {
+        if (!latestCurrentPosition && !currentTruckMarker) return;
+        latestCurrentPosition = null;
+        currentTruckMarker && (currentTruckMarker.map = null);
+        currentTruckMarker = null;
+        routeRequestVersion++;
+        clearRoutePolylines();
+        latestScoredRoutes = [];
+        selectedRouteOriginalIndex = null;
+        updateRoutePanelEmpty('Waiting for live GPS', 'Routing resumes when a fresh location arrives.');
+        updateEtaPanel(null);
+        updateAiPanel(null, null, null);
+        renderAlternateRoutes([]);
+    }
 
     const googleApiKey = @json($googleMapsApiKey);
     const csrfToken = @json(csrf_token());
@@ -878,9 +911,10 @@
         ]);
 
         AdvancedMarkerElementClass = AdvancedMarkerElement;
-        latestCurrentPosition = initialCurrentPosition;
+        if (!latestCurrentPosition && ColdTraceLocation.fresh(detailGpsRecordedAt)) latestCurrentPosition = initialCurrentPosition;
+        if (!ColdTraceLocation.fresh(detailGpsRecordedAt)) latestCurrentPosition = null;
 
-        const fallbackPosition = initialCurrentPosition || initialDeliveryPosition || {
+        const fallbackPosition = latestCurrentPosition || initialDeliveryPosition || {
             lat: 14.5995,
             lng: 120.9842,
         };
@@ -904,12 +938,12 @@
             coldTraceBounds.extend(initialDeliveryPosition);
         }
 
-        if (initialCurrentPosition) {
-            currentTruckMarker = createMapMarker(initialCurrentPosition, 'current', 'Current Vehicle / ESP32 Location');
-            coldTraceBounds.extend(initialCurrentPosition);
+        if (latestCurrentPosition) {
+            currentTruckMarker = createMapMarker(latestCurrentPosition, 'current', 'Current Vehicle / ESP32 Location');
+            coldTraceBounds.extend(latestCurrentPosition);
         }
 
-        if (initialCurrentPosition || initialDeliveryPosition) {
+        if (latestCurrentPosition || initialDeliveryPosition) {
             coldTraceMap.fitBounds(coldTraceBounds);
         } else {
             coldTraceMap.setZoom(11);
@@ -953,6 +987,8 @@ function createMarkerContent(type) {
 }
 
     function updateCurrentGpsMarker(lat, lng) {
+        if (!ColdTraceLocation.fresh(detailGpsRecordedAt) || !ColdTraceLocation.valid(lat, lng)) return;
+        const moved = !latestCurrentPosition || latestCurrentPosition.lat !== Number(lat) || latestCurrentPosition.lng !== Number(lng);
         const position = {
             lat: Number(lat),
             lng: Number(lng),
@@ -970,7 +1006,7 @@ function createMarkerContent(type) {
             currentTruckMarker.position = position;
         }
 
-        calculateInternalRoute(false);
+        if (moved) calculateInternalRoute(false);
     }
 
     function startInPageNavigation() {
@@ -987,6 +1023,8 @@ function createMarkerContent(type) {
     }
 
     async function calculateInternalRoute(shouldFocus) {
+        const requestVersion = ++routeRequestVersion;
+        if (!ColdTraceLocation.fresh(detailGpsRecordedAt)) clearCurrentGpsMarker();
         const origin = latestCurrentPosition;
         const destination = initialDeliveryPosition;
 
@@ -1000,6 +1038,7 @@ function createMarkerContent(type) {
 
         try {
             const result = await fetchCandidateRoutes(origin, destination);
+            if (requestVersion !== routeRequestVersion || !ColdTraceLocation.fresh(detailGpsRecordedAt)) return;
 
             if (!result.routes || result.routes.length === 0) {
                 console.error('Routes API error:', result.error || result.raw);
@@ -1038,6 +1077,7 @@ function createMarkerContent(type) {
             }
 
         } catch (error) {
+            if (requestVersion !== routeRequestVersion) return;
             console.error('Routes API request failed:', error);
             updateRoutePanelEmpty('Route error', 'ColdTrace could not connect to the Routes API.');
             updateEtaPanel(null);
@@ -2046,7 +2086,6 @@ function createMarkerContent(type) {
         let activeController = null;
         let pollTimer = null;
         let lastRecordedAt = null;
-        let lastGpsKey = null;
 
         function formatTelemetryDate(value) {
             if (!value) {
@@ -2071,6 +2110,9 @@ function createMarkerContent(type) {
 
         function applyTelemetry(data) {
             if (!data) {
+                detailGpsRecordedAt = NaN;
+                detailReadingRecordedAt = NaN;
+                clearDetailLocation();
                 setTelemetryChip('Telemetry: Waiting');
                 return;
             }
@@ -2107,7 +2149,11 @@ function createMarkerContent(type) {
 
             updateRslPanels(rsl);
 
-            if (latitude !== null && longitude !== null) {
+            const tripOpen = ['pending', 'in_progress'].includes(data.trip_status);
+            detailGpsRecordedAt = tripOpen && ColdTraceLocation.valid(latitude, longitude)
+                ? ColdTraceLocation.time(data.gps_recorded_at) : NaN;
+            detailReadingRecordedAt = ColdTraceLocation.time(data.recorded_at);
+            if (tripOpen && ColdTraceLocation.fresh(detailGpsRecordedAt) && ColdTraceLocation.valid(latitude, longitude)) {
                 const gpsText = `${latitude.toFixed(7)}, ${longitude.toFixed(7)}`;
 
                 setText('liveGps', gpsText);
@@ -2122,23 +2168,16 @@ function createMarkerContent(type) {
                 setText('liveLocationName', locationLabel);
                 setText('liveLocationCoords', gpsText);
 
-                const gpsKey = `${latitude.toFixed(7)},${longitude.toFixed(7)}`;
-
-                if (gpsKey !== lastGpsKey && typeof updateCurrentGpsMarker === 'function') {
-                    lastGpsKey = gpsKey;
-                    updateCurrentGpsMarker(latitude, longitude);
-                }
+                if (typeof updateCurrentGpsMarker === 'function') updateCurrentGpsMarker(latitude, longitude);
             } else {
-                setText('liveGps', 'No GPS reading yet');
-                setText('liveGpsStatus', 'Waiting for a recent live-location fix');
-                setText('liveLocationName', 'No GPS yet');
-                setText('liveLocationCoords', 'No GPS reading yet');
+                clearDetailLocation();
             }
 
             setText('liveLastReading', formatTelemetryDate(data.recorded_at));
             setTelemetryChip(
-                data.temperature_source === 'simulated' ? 'Telemetry: Demo API' : 'Telemetry: Connected',
-                'connected'
+                !tripOpen ? 'Telemetry: Trip closed' : !ColdTraceLocation.fresh(detailReadingRecordedAt) ? 'Telemetry: No recent readings'
+                    : data.temperature_source === 'simulated' ? 'Telemetry: Demo API' : 'Telemetry: Connected',
+                tripOpen && ColdTraceLocation.fresh(detailReadingRecordedAt) ? 'connected' : null
             );
 
             const readingChanged = data.recorded_at && data.recorded_at !== lastRecordedAt;
@@ -2149,7 +2188,7 @@ function createMarkerContent(type) {
             }));
 
             if (
-                readingChanged
+                readingChanged && tripOpen && ColdTraceLocation.fresh(detailGpsRecordedAt)
                 && typeof scoreRoutes === 'function'
                 && Array.isArray(latestScoredRoutes)
                 && latestScoredRoutes.length
@@ -2194,6 +2233,7 @@ function createMarkerContent(type) {
                 const response = await fetch(telemetryUrl, {
                     method: 'GET',
                     credentials: 'same-origin',
+                    cache: 'no-store',
                     signal: activeController.signal,
                     headers: {
                         Accept: 'application/json',

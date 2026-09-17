@@ -34,7 +34,7 @@
             const position = getBestTruckPosition(trip);
             const gpsLabel = position
                 ? (trip.gps?.source === 'demo' ? 'Demo location' : 'Live GPS')
-                : trip.gps ? 'GPS update overdue' : 'Waiting for GPS';
+                : trip.gps ? 'No live GPS · disconnected or GPS unavailable' : 'Waiting for GPS';
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'trip-button';
@@ -58,8 +58,7 @@
         document.getElementById('pendingTripCount').textContent = trips.filter(t => t.status === 'pending').length;
         document.getElementById('onlineTruckCount').textContent = trips.filter(t => getBestTruckPosition(t)).length;
         document.getElementById('criticalReadingCount').textContent = trips.filter(t => {
-            const age = Date.now() - Date.parse(t.latestTelemetry?.recorded_at);
-            return age <= 120000 && age >= -30000 && t.latestTelemetry?.temperature_status?.is_breach;
+            return ColdTraceLocation.fresh(t.latestTelemetry?.recorded_at) && t.latestTelemetry?.temperature_status?.is_breach;
         }).length;
         filterTrips(document.getElementById('fleetSearch').value);
         setActiveTripButton(selectedTripId);
@@ -75,7 +74,7 @@
         const visible = trips.filter(t => selectedTripId === null || t.id === selectedTripId);
         const positions = new Map(visible.map(t => [t.id, getBestTruckPosition(t)]));
         truckMarkers.forEach((marker, id) => {
-            if (!positions.get(id)) { marker.map = null; truckMarkers.delete(id); }
+            if (!positions.get(id)) { marker.fleetInfoWindow?.close(); marker.map = null; truckMarkers.delete(id); }
         });
         visible.forEach(trip => {
             const position = positions.get(trip.id);
@@ -106,8 +105,8 @@
         if (!data || typeof data !== 'object') return;
         const trip = trips.find(t => t.devices?.some(d => d.code === data.device_code && d.topic === topic));
         if (!trip || (packet.retain && !data.recorded_at)) return;
-        const timestamp = data.recorded_at ? Date.parse(data.recorded_at) : Date.now();
-        if (!Number.isFinite(timestamp) || Date.now() - timestamp > 120000 || timestamp - Date.now() > 30000) return;
+        const timestamp = ColdTraceLocation.packetTime(data, packet);
+        if (timestamp === null) return;
         const live = liveTelemetryByTruck.get(trip.id) ?? {};
         const recordedAt = new Date(timestamp).toISOString();
         const numeric = value => value !== null && value !== undefined && value !== '' && typeof value !== 'boolean' && Number.isFinite(Number(value));
@@ -156,8 +155,10 @@
     }
 
     renderFleet();
+    const fleetExpiryTimer = setInterval(renderFleet, 1000);
+    document.addEventListener('visibilitychange', () => { renderFleet(); if (!document.hidden) refreshFleetSnapshot(); });
     const fleetRefreshTimer = setInterval(refreshFleetSnapshot, 5000);
-    window.addEventListener('pagehide', () => { clearInterval(fleetRefreshTimer); fleetMqttClient?.end(); });
+    window.addEventListener('pagehide', () => { clearInterval(fleetRefreshTimer); clearInterval(fleetExpiryTimer); fleetMqttClient?.end(); });
 </script>
 @if (!empty($mqttBroker) && !empty($mqttUsername) && !empty($mqttPassword))
 <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>

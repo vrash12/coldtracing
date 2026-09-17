@@ -392,6 +392,39 @@
     let stopMarkers = new Map();
     let routePolyline = null;
     let latestCurrentPosition = initialCurrentPosition;
+    let currentGpsRecordedAt = ColdTraceLocation.time(@json($gpsRecordedAt ?? null));
+    let currentGpsSource = @json($gpsSource ?? null);
+    let locationGeneration = 0;
+
+    function expireDriverLocation(force = false) {
+        if (!force && ColdTraceLocation.fresh(currentGpsRecordedAt)) return;
+        if (!latestCurrentPosition && !currentTruckMarker) return;
+        latestCurrentPosition = null;
+        currentTruckMarker && (currentTruckMarker.map = null);
+        currentTruckMarker = null;
+        locationGeneration++;
+        routePolyline?.setMap(null);
+        routePolyline = null;
+        routeHasBeenOptimized = false;
+        lastRouteResult = null;
+        document.getElementById('optimizedDistance').innerText = '—';
+        document.getElementById('optimizedDuration').innerText = '—';
+        document.getElementById('optimizedDistanceHelp').innerText = 'Waiting for live GPS.';
+        document.getElementById('optimizedDurationHelp').innerText = 'Waiting for live GPS.';
+        document.getElementById('currentGpsText').innerText = 'No live GPS';
+        document.getElementById('currentGpsHelp').innerText = 'Truck disconnected or GPS unavailable. Waiting for a fresh location.';
+        setCurrentGpsCardState();
+        updateMapsButtons(null);
+        setRouteBadge('Waiting for live GPS', 'warning');
+        setRouteMessage('The last location expired. Routing will be available when a fresh location arrives.', 'warning');
+    }
+    const driverLocationTimer = setInterval(expireDriverLocation, 1000);
+    document.addEventListener('visibilitychange', () => expireDriverLocation());
+    window.addEventListener('pagehide', () => {
+        clearInterval(driverLocationTimer);
+        if (softwareTelemetryTimer !== null) clearInterval(softwareTelemetryTimer);
+        if (liveLocationWatchId !== null) navigator.geolocation?.clearWatch(liveLocationWatchId);
+    });
     let optimizedStops = [...deliveryStops];
     let routeHasBeenOptimized = false;
     let lastRouteResult = null;
@@ -452,13 +485,16 @@
         card.classList.toggle('waiting', !latestCurrentPosition);
     }
 
-    function updateCurrentGpsDisplay(position, sourceText) {
+    function updateCurrentGpsDisplay(position, sourceText, recordedAt, source) {
         const latitude = Number(position.lat);
         const longitude = Number(position.lng);
 
-        if (!isUsableCoordinate(latitude, longitude)) {
+        if (!isUsableCoordinate(latitude, longitude) || !ColdTraceLocation.fresh(recordedAt)
+            || recordedAt < currentGpsRecordedAt) {
             return false;
         }
+        currentGpsRecordedAt = recordedAt;
+        currentGpsSource = source;
 
         latestCurrentPosition = {
             lat: latitude,
@@ -521,7 +557,8 @@
         if (!isUsableCoordinate(latitude, longitude)
             || !Number.isFinite(accuracy)
             || accuracy <= 0
-            || accuracy > BROWSER_GPS_MAX_ACCURACY_METERS) {
+            || accuracy > BROWSER_GPS_MAX_ACCURACY_METERS
+            || !ColdTraceLocation.fresh(position?.timestamp)) {
             return false;
         }
 
@@ -529,12 +566,13 @@
             latitude,
             longitude,
             accuracy,
+            recordedAt: position.timestamp,
         };
 
         updateCurrentGpsDisplay({
             lat: latitude,
             lng: longitude,
-        }, `Live device location · estimated accuracy ±${Math.round(accuracy)} m.`);
+        }, `Live device location · estimated accuracy ±${Math.round(accuracy)} m.`, position.timestamp, 'software');
 
         return true;
     }
@@ -546,7 +584,7 @@
 
         softwareTelemetryRequestPending = true;
 
-        const payload = softwareTelemetryPosition
+        const payload = softwareTelemetryPosition && ColdTraceLocation.fresh(softwareTelemetryPosition.recordedAt)
             ? {
                 latitude: softwareTelemetryPosition.latitude,
                 longitude: softwareTelemetryPosition.longitude,
@@ -650,6 +688,7 @@
         }
 
         softwareTelemetryPosition = null;
+        if (currentGpsSource === 'software') expireDriverLocation(true);
         updateSoftwareTelemetryButton();
         setRouteBadge('API feed stopped', 'warning');
         setRouteMessage('The software telemetry feed is stopped. No simulated temperature or device location updates are being saved.', 'warning');
@@ -669,6 +708,8 @@
     }
 
     async function optimizeDriverOrdersRoute(shouldFocus) {
+        expireDriverLocation();
+        const generation = locationGeneration;
         if (!deliveryStops.length) {
             setRouteBadge('No stops', 'warning');
             setRouteMessage('There are no active assigned orders with delivery coordinates to optimize.', 'warning');
@@ -693,12 +734,14 @@
                 result = await optimizeWithNearestNeighborAndRoutesApi(latestCurrentPosition, deliveryStops);
             }
 
+            if (generation !== locationGeneration || !latestCurrentPosition) return;
             if (!result) {
                 result = buildNearestNeighborFallback(latestCurrentPosition, deliveryStops);
             }
 
             applyOptimizedRouteResult(result, shouldFocus);
         } catch (error) {
+            if (generation !== locationGeneration || !latestCurrentPosition) return;
             console.error('Route optimization failed:', error);
             const fallback = buildNearestNeighborFallback(latestCurrentPosition, deliveryStops);
             applyOptimizedRouteResult(fallback, shouldFocus);
@@ -1240,6 +1283,7 @@
     }
 
     function updateCurrentTruckMarker() {
+        expireDriverLocation();
         if (!driverOrdersRouteMap || !AdvancedMarkerElementClass || !latestCurrentPosition) {
             return;
         }
@@ -1444,59 +1488,16 @@
     const subscribeTopic = @json($expectedTopic ?: 'coldtrace/trucks/+/telemetry');
     const expectedDeviceCode = @json($expectedDeviceCode);
 
-    function shouldAcceptDriverPayload(data) {
-        // With no device paired to this driver's truck there is no reading that
-        // legitimately belongs to them, so nothing on the wildcard topic is
-        // accepted. Showing another truck's position would be worse than none.
-        if (!expectedDeviceCode) {
-            return false;
-        }
-
-        return data.device_code === expectedDeviceCode;
-    }
-
-    function handleDriverTelemetryPayload(data) {
-        if (!shouldAcceptDriverPayload(data)) {
-            return;
-        }
-
-        if (data.latitude === null || data.latitude === undefined
-            || data.longitude === null || data.longitude === undefined) {
-            return;
-        }
-
-        const latitude = Number(data.latitude);
-        const longitude = Number(data.longitude);
-        const satellites = data.satellites === undefined ? null : Number(data.satellites);
-        const hdop = data.hdop === undefined ? null : Number(data.hdop);
-
-        if (data.gps_valid !== true || !isUsableCoordinate(latitude, longitude)) {
-            return;
-        }
-
-        if ((satellites !== null && (!Number.isFinite(satellites) || satellites < 4))
-            || (hdop !== null && (!Number.isFinite(hdop) || hdop > 5))) {
-            return;
-        }
-
-        const qualityParts = ['Live verified ESP32 GPS'];
-
-        if (satellites !== null) {
-            qualityParts.push(`${satellites} satellites`);
-        }
-
-        if (hdop !== null) {
-            qualityParts.push(`HDOP ${hdop.toFixed(1)}`);
-        }
-
-        updateCurrentGpsDisplay({
-            lat: latitude,
-            lng: longitude,
-        }, `${qualityParts.join(' · ')}.`);
-
-        if (routeHasBeenOptimized) {
-            updateMapsButtons(buildGoogleMapsMultiStopUrl(optimizedStops));
-        }
+    function handleDriverTelemetryPayload(data, topic, packet = {}) {
+        if (!data || !expectedDeviceCode || data.device_code !== expectedDeviceCode || topic !== subscribeTopic) return;
+        const timestamp = ColdTraceLocation.packetTime(data, packet);
+        if (timestamp === null || timestamp < currentGpsRecordedAt) return;
+        if (data.gps_valid !== true || !ColdTraceLocation.valid(data.latitude, data.longitude)) return;
+        if (data.satellites !== undefined && (!ColdTraceLocation.numeric(data.satellites) || Number(data.satellites) < 4)) return;
+        if (data.hdop !== undefined && (!ColdTraceLocation.numeric(data.hdop) || Number(data.hdop) < 0 || Number(data.hdop) > 5)) return;
+        updateCurrentGpsDisplay({lat: Number(data.latitude), lng: Number(data.longitude)},
+            'Live verified ESP32 GPS', timestamp, 'esp32');
+        if (routeHasBeenOptimized) updateMapsButtons(buildGoogleMapsMultiStopUrl(optimizedStops));
     }
 
     const mqttClient = mqtt.connect(mqttBroker, mqttOptions);
@@ -1511,13 +1512,18 @@
         });
     });
 
-    mqttClient.on('message', function (topic, message) {
+    mqttClient.on('message', function (topic, message, packet) {
         try {
             const data = JSON.parse(message.toString());
-            handleDriverTelemetryPayload(data);
+            handleDriverTelemetryPayload(data, topic, packet);
         } catch (error) {
             console.error('Invalid MQTT telemetry payload:', error);
         }
+    });
+
+    window.addEventListener('pagehide', () => mqttClient.end());
+    mqttClient.on('offline', () => {
+        document.getElementById('currentGpsHelp').innerText = 'Live connection lost. Reconnecting; the last location expires automatically.';
     });
 
     mqttClient.on('error', function (error) {

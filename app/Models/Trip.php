@@ -76,9 +76,9 @@ class Trip extends Model
     public function latestGpsTelemetry()
     {
         return $this->hasOne(TelemetryLog::class)
-            ->whereNotNull('latitude')
-            ->whereNotNull('longitude')
-            ->latestOfMany('recorded_at');
+            ->ofMany(['recorded_at' => 'max', 'id' => 'max'], function ($query) {
+                $query->whereNotNull('latitude')->whereNotNull('longitude');
+            });
     }
 
     public function alerts()

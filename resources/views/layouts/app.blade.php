@@ -237,6 +237,7 @@
 </script>
 
 <x-maps.truck-marker-assets />
+<x-maps.live-location />
 @stack('scripts')
 
 <script>
