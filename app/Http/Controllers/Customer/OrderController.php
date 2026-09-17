@@ -313,6 +313,20 @@ class OrderController extends Controller
             'expected_delivery_at' => ['nullable', 'date'],
             'notes' => ['nullable', 'string'],
             'save_permanent_address' => ['nullable', 'boolean'],
+        ], [
+            'items.required' => 'Add at least one item to the order.',
+            'items.*.product_id.required' => 'Choose a product for every item.',
+            'items.*.quantity.required' => 'Enter a quantity for every item.',
+            'items.*.quantity.min' => 'Each quantity must be greater than zero.',
+            'delivery_address.required' => 'Choose a delivery address using the search or map.',
+            'delivery_lat.required' => 'Confirm the delivery pin on the map.',
+            'delivery_lng.required' => 'Confirm the delivery pin on the map.',
+            'expected_delivery_at.date' => 'Enter a valid preferred delivery date and time.',
+        ], [
+            'items.*.product_id' => 'product',
+            'items.*.quantity' => 'quantity',
+            'items.*.unit' => 'unit',
+            'expected_delivery_at' => 'preferred delivery time',
         ]);
     }
 

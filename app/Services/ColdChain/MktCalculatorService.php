@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace App\Services\ColdChain;
 
+use Carbon\CarbonImmutable;
+use DateTimeInterface;
 use InvalidArgumentException;
+use Throwable;
 
 final class MktCalculatorService
 {
@@ -25,7 +28,7 @@ final class MktCalculatorService
     /**
      * Calculate Mean Kinetic Temperature using equally spaced readings.
      *
-     * @param array<int, float|int|string|null> $temperaturesCelsius
+     * @param  array<int, float|int|string|null>  $temperaturesCelsius
      */
     public function calculate(
         array $temperaturesCelsius,
@@ -49,7 +52,7 @@ final class MktCalculatorService
                 continue;
             }
 
-            if (!is_numeric($temperatureCelsius)) {
+            if (! is_numeric($temperatureCelsius)) {
                 throw new InvalidArgumentException(
                     'Every MKT temperature reading must be numeric.'
                 );
@@ -134,13 +137,13 @@ final class MktCalculatorService
                 continue;
             }
 
-            if (!is_numeric($temperature)) {
+            if (! is_numeric($temperature)) {
                 throw new InvalidArgumentException(
                     "Temperature at reading index {$index} must be numeric."
                 );
             }
 
-            if (!is_numeric($duration) || (float) $duration <= 0) {
+            if (! is_numeric($duration) || (float) $duration <= 0) {
                 throw new InvalidArgumentException(
                     "Duration at reading index {$index} must be greater than zero."
                 );
@@ -191,31 +194,131 @@ final class MktCalculatorService
     /**
      * Calculate MKT directly from TelemetryLog models or arrays.
      *
-     * @param iterable<mixed> $telemetryLogs
+     * Telemetry timestamps are converted into trapezoidal time weights so
+     * irregular upload intervals do not count every reading equally. If a
+     * usable timestamp series is unavailable, the method safely falls back
+     * to the equally spaced calculation.
+     *
+     * @param  iterable<mixed>  $telemetryLogs
      */
     public function calculateFromTelemetry(
         iterable $telemetryLogs,
         ?float $activationEnergyJPerMol = null,
         int $precision = 2
     ): ?float {
-        $temperatures = [];
+        $readings = [];
 
         foreach ($telemetryLogs as $telemetryLog) {
             if (is_array($telemetryLog)) {
-                $temperatures[] =
-                    $telemetryLog['temperature'] ?? null;
+                $temperature = $telemetryLog['temperature'] ?? null;
+                $recordedAt = $telemetryLog['recorded_at'] ?? null;
+            } else {
+                $temperature = $telemetryLog->temperature ?? null;
+                $recordedAt = $telemetryLog->recorded_at ?? null;
+            }
 
+            if ($temperature === null || $temperature === '') {
                 continue;
             }
 
-            $temperatures[] = $telemetryLog->temperature ?? null;
+            $readings[] = [
+                'temperature' => $temperature,
+                'timestamp' => $this->timestamp($recordedAt),
+            ];
         }
 
-        return $this->calculate(
-            temperaturesCelsius: $temperatures,
+        if ($readings === []) {
+            return null;
+        }
+
+        $temperatures = array_column($readings, 'temperature');
+        $hasMissingTimestamp = false;
+
+        foreach ($readings as $reading) {
+            if ($reading['timestamp'] === null) {
+                $hasMissingTimestamp = true;
+
+                break;
+            }
+        }
+
+        if (
+            count($readings) < 2
+            || $hasMissingTimestamp
+        ) {
+            return $this->calculate(
+                temperaturesCelsius: $temperatures,
+                activationEnergyJPerMol: $activationEnergyJPerMol,
+                precision: $precision
+            );
+        }
+
+        usort(
+            $readings,
+            fn (array $first, array $second): int => $first['timestamp'] <=> $second['timestamp']
+        );
+
+        for ($index = 1; $index < count($readings); $index++) {
+            if (
+                $readings[$index]['timestamp']
+                <= $readings[$index - 1]['timestamp']
+            ) {
+                return $this->calculate(
+                    temperaturesCelsius: array_column(
+                        $readings,
+                        'temperature'
+                    ),
+                    activationEnergyJPerMol: $activationEnergyJPerMol,
+                    precision: $precision
+                );
+            }
+        }
+
+        $weightedReadings = [];
+        $lastIndex = count($readings) - 1;
+
+        foreach ($readings as $index => $reading) {
+            if ($index === 0) {
+                $durationSeconds =
+                    ($readings[1]['timestamp'] - $reading['timestamp']) / 2;
+            } elseif ($index === $lastIndex) {
+                $durationSeconds =
+                    ($reading['timestamp']
+                        - $readings[$index - 1]['timestamp']) / 2;
+            } else {
+                $durationSeconds =
+                    ($readings[$index + 1]['timestamp']
+                        - $readings[$index - 1]['timestamp']) / 2;
+            }
+
+            $weightedReadings[] = [
+                'temperature' => $reading['temperature'],
+                'duration_seconds' => $durationSeconds,
+            ];
+        }
+
+        return $this->calculateWeighted(
+            readings: $weightedReadings,
             activationEnergyJPerMol: $activationEnergyJPerMol,
             precision: $precision
         );
+    }
+
+    private function timestamp(mixed $value): ?float
+    {
+        if ($value instanceof DateTimeInterface) {
+            return (float) $value->format('U.u');
+        }
+
+        if (! is_string($value) || trim($value) === '') {
+            return null;
+        }
+
+        try {
+            return (float) CarbonImmutable::parse($value)->format('U.u');
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     private function toKelvin(float $temperatureCelsius): float

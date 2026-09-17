@@ -4,27 +4,31 @@
 
 @section('content')
 
-<div class="orders-page">
+<div class="ct-index orders-page order-workflow-page">
 
-    <div class="page-toolbar">
+    <header class="ct-index-header page-toolbar">
         <div>
-            <h1>Create Order</h1>
+            <small>Administrator workspace</small>
+            <h1>Create an order</h1>
+            <p>Enter the request details, then assign a driver now or leave it pending.</p>
         </div>
 
-        <a href="{{ route('orders.index') }}" class="secondary-button">
-            Back to Orders
+        <a href="{{ route('orders.index') }}" class="ct-button ct-button-light secondary-button">
+            <i class="bi bi-arrow-left"></i>Orders
         </a>
-    </div>
+    </header>
+
+    <x-form-errors />
 
     <div class="form-panel">
-        <form method="POST" action="{{ route('orders.store') }}">
+        <form method="POST" action="{{ route('orders.store') }}" class="admin-order-form">
             @csrf
 
             @include('admin.orders.partials.form', [
                 'order' => null,
                 'products' => $products,
                 'receivers' => $receivers,
-                'buttonText' => 'Create Order',
+                'buttonText' => 'Create order',
             ])
         </form>
     </div>
@@ -32,7 +36,3 @@
 </div>
 
 @endsection
-
-@push('styles')
-@include('admin.orders.partials.styles')
-@endpush

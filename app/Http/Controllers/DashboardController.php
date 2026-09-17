@@ -5,14 +5,18 @@ namespace App\Http\Controllers;
 use App\Models\Alert;
 use App\Models\Device;
 use App\Models\Order;
+use App\Models\Product;
 use App\Models\TelemetryLog;
 use App\Models\Trip;
+use App\Models\User;
+use App\Services\ColdChain\TemperatureStatusService;
 use Illuminate\Support\Facades\Auth;
 
 class DashboardController extends Controller
 {
-    public function index()
-    {
+    public function index(
+        TemperatureStatusService $temperatureStatusService
+    ) {
         if (! Auth::check() || ! Auth::user()->isAdministrator()) {
             abort(403, 'Only administrators can access this dashboard.');
         }
@@ -59,6 +63,18 @@ class DashboardController extends Controller
             ->take(6)
             ->get();
 
+        $activeDeliveryTrips->each(function (Trip $trip) use (
+            $temperatureStatusService
+        ) {
+            $trip->setAttribute(
+                'temperature_state',
+                $temperatureStatusService->evaluate(
+                    $trip->latestTelemetry?->temperature,
+                    $trip->product
+                )
+            );
+        });
+
         $pendingAssignmentOrders = Order::with([
             'receiver',
             'orderItems.product',
@@ -83,6 +99,8 @@ class DashboardController extends Controller
             ->latest('recorded_at')
             ->first()?->recorded_at;
 
+        $setupSteps = $this->setupSteps();
+
         return view('dashboard', compact(
             'pendingOrders',
             'activeOrders',
@@ -97,6 +115,53 @@ class DashboardController extends Controller
             'pendingAssignmentOrders',
             'recentOrders',
             'latestTelemetryAt',
+            'setupSteps',
         ));
+    }
+
+    /**
+     * An order cannot be dispatched until a product exists, a driver holds a
+     * truck, and a device is paired to that truck. Those dependencies are not
+     * visible anywhere else, so the dashboard states them plainly until they
+     * are all satisfied.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function setupSteps(): array
+    {
+        $activeDrivers = User::query()
+            ->where('status', 'active')
+            ->whereHas('role', fn ($query) => $query->where('name', 'Driver'));
+
+        return [
+            [
+                'label' => 'Product catalogue available',
+                'detail' => 'Orders use the configured product catalogue. Contact the system maintainer if no products are available.',
+                'done' => Product::query()->exists(),
+                'url' => null,
+                'action' => null,
+            ],
+            [
+                'label' => 'Create a driver account',
+                'detail' => 'Drivers sign in to start trips and report cargo condition.',
+                'done' => (clone $activeDrivers)->exists(),
+                'url' => route('users.create'),
+                'action' => 'Add driver',
+            ],
+            [
+                'label' => 'Register a truck and assign its driver',
+                'detail' => 'An order requires a driver with a truck in service. Contact the system maintainer to configure truck assignments.',
+                'done' => (clone $activeDrivers)->whereHas('assignedTruck')->exists(),
+                'url' => null,
+                'action' => null,
+            ],
+            [
+                'label' => 'Pair a tracking device with that truck',
+                'detail' => 'Readings reach a trip through the device on its truck. Contact the system maintainer to configure device pairing.',
+                'done' => Device::query()->whereNotNull('truck_id')->exists(),
+                'url' => null,
+                'action' => null,
+            ],
+        ];
     }
 }

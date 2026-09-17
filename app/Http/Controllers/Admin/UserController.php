@@ -12,7 +12,7 @@ use Illuminate\Validation\Rule;
 
 class UserController extends Controller
 {
-    private const SUPPORTED_ROLES = ['Administrator', 'Driver', 'Receiver'];
+    private const SUPPORTED_ROLES = ['Administrator', 'Driver'];
 
     /**
      * Only Administrator users can access this module.
@@ -36,6 +36,7 @@ class UserController extends Controller
         $status = $request->input('status');
 
         $users = User::with('role')
+            ->whereHas('role', fn ($query) => $query->whereIn('name', self::SUPPORTED_ROLES))
             ->when($search, function ($query) use ($search) {
                 $query->where(function ($subQuery) use ($search) {
                     $subQuery->where('name', 'like', "%{$search}%")
@@ -55,6 +56,7 @@ class UserController extends Controller
 
         $roles = $this->supportedRoles();
         $accountStats = User::query()
+            ->whereHas('role', fn ($query) => $query->whereIn('name', self::SUPPORTED_ROLES))
             ->selectRaw('COUNT(*) AS total_accounts')
             ->selectRaw("SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_accounts")
             ->first();
@@ -66,8 +68,8 @@ class UserController extends Controller
         $stats = [
             'total' => (int) $accountStats->total_accounts,
             'active' => (int) $accountStats->active_accounts,
+            'administrators' => (int) $roleCounts->get('Administrator', 0),
             'drivers' => (int) $roleCounts->get('Driver', 0),
-            'receivers' => (int) $roleCounts->get('Receiver', 0),
         ];
 
         return view('admin.users.index', compact(

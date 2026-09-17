@@ -16,6 +16,8 @@
     </a>
 </div>
 
+<x-form-errors />
+
 <div class="form-panel">
     <form method="POST" action="{{ route('users.store') }}" class="user-form">
         @csrf

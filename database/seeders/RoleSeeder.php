@@ -12,7 +12,9 @@ class RoleSeeder extends Seeder
         $roles = [
             'Administrator' => 'Manages ColdTrace users, orders, reports, and fleet operations.',
             'Driver' => 'Manages assigned deliveries, routes, trips, and telemetry monitoring.',
-            'Receiver' => 'Creates and monitors cold-chain delivery orders.',
+            // Retained only for compatibility with existing recipient-linked records.
+            // Receiver accounts cannot authenticate or access a workspace.
+            'Receiver' => 'Legacy recipient record (no system login access).',
         ];
 
         foreach ($roles as $name => $description) {

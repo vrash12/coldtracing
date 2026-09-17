@@ -1,6 +1,6 @@
 @extends('layouts.app')
 
-@section('title', 'Assigned Order Location')
+@section('title', 'Delivery ' . $order->order_code)
 
 @section('content')
 
@@ -19,8 +19,12 @@
         $latestTelemetry->longitude !== null
     );
 
-    $currentLat = $hasCurrentGps ? (float) $latestTelemetry?->latitude : null;
-    $currentLng = $hasCurrentGps ? (float) $latestTelemetry?->longitude : null;
+    $currentLat = $hasCurrentGps
+        ? (float) ($currentLat ?? $latestTelemetry?->latitude)
+        : null;
+    $currentLng = $hasCurrentGps
+        ? (float) ($currentLng ?? $latestTelemetry?->longitude)
+        : null;
 
     $temperatureValue = $latestTelemetry?->temperature !== null
         ? number_format((float) $latestTelemetry->temperature, 2)
@@ -58,19 +62,10 @@
 
     $temperatureClass = $temperatureClass ?? 'neutral';
     $temperatureStatus = $temperatureStatus ?? 'No Data';
-
-    if ($latestTelemetry && $monitoredProduct) {
-        if ($latestTelemetry->temperature < $monitoredProduct->min_temp) {
-            $temperatureClass = 'warning';
-            $temperatureStatus = 'Too Low';
-        } elseif ($latestTelemetry->temperature > $monitoredProduct->max_temp) {
-            $temperatureClass = 'critical';
-            $temperatureStatus = 'Too High';
-        } else {
-            $temperatureClass = 'safe';
-            $temperatureStatus = 'Safe';
-        }
-    }
+    $isSimulatedTemperature = str_starts_with(
+        (string) $latestTelemetry?->device?->device_code,
+        'SIM-'
+    );
 
     $currentGpsText = $hasCurrentGps
         ? number_format($currentLat, 7) . ', ' . number_format($currentLng, 7)
@@ -96,7 +91,7 @@
 @endphp
 
 <div
-    class="driver-order-show-page"
+    class="ct-index driver-order-show-page"
     id="driverOrderPage"
     data-telemetry-url="{{ route('driver.orders.telemetry.latest', $order) }}"
     data-poll-interval="5000"
@@ -104,22 +99,15 @@
 
     <section class="hero-panel">
         <div class="hero-left">
-            <span class="eyebrow">Assigned Order</span>
+            <span class="eyebrow">Current delivery</span>
 
             <h1>{{ $order->order_code }}</h1>
 
-            <p>
-                Monitor the assigned vehicle, backend-processed cold-chain indicators, ETA,
-                route guidance, and ColdTrace AI recommendations in one driver workspace.
-            </p>
+            <p>{{ $order->delivery_address }}</p>
 
             <div class="hero-tags">
                 <span class="status-badge status-{{ $order->status }}">
                     {{ ucfirst(str_replace('_', ' ', $order->status)) }}
-                </span>
-
-                <span class="soft-chip">
-                    {{ $order->orderItems->count() }} product item(s)
                 </span>
 
                 <span class="soft-chip" id="telemetryConnectionChip">
@@ -131,13 +119,13 @@
         <div class="hero-actions" aria-label="Driver quick actions">
             <a href="{{ route('driver.orders.index') }}" class="secondary-button">
                 <i class="bi bi-arrow-left"></i>
-                Back
+                Orders
             </a>
 
             @if ($receiverPhoneLink)
                 <a href="tel:{{ $receiverPhoneLink }}" class="secondary-button">
                     <i class="bi bi-telephone"></i>
-                    Call Receiver
+                    Call receiver
                 </a>
             @endif
 
@@ -150,7 +138,7 @@
 
             <button type="button" class="primary-button" onclick="startInPageNavigation()">
                 <i class="bi bi-signpost-split"></i>
-                Start Route
+                Start route
             </button>
         </div>
     </section>
@@ -168,14 +156,6 @@
             <small>{{ $order->receiver?->phone ?? $order->receiver?->email ?? 'No contact available' }}</small>
         </div>
 
-        <div class="quick-card temperature {{ $temperatureClass }}">
-            <span>Cargo Temperature</span>
-            <strong id="quickTemperature">
-                {{ $temperatureValue !== null ? $temperatureValue . ' °C' : 'No Data' }}
-            </strong>
-            <small id="quickTemperatureStatus">{{ $temperatureStatus }}</small>
-        </div>
-
         <div class="quick-card schedule">
             <span>Expected Delivery</span>
             <strong>{{ $order->expected_delivery_at?->format('M d, Y') ?? 'Not set' }}</strong>
@@ -186,11 +166,9 @@
     <section class="live-panel">
         <div class="section-title-row">
             <div>
-                <span class="section-kicker">Live Telemetry</span>
-                <h2>Cold-Chain Health and Vehicle Position</h2>
-                <p>
-                    Temperature, MKT, and remaining shelf life are read from the Laravel backend, while GPS keeps the active route current.
-                </p>
+                <span class="section-kicker">Cargo condition</span>
+                <h2>Live temperature and shelf life</h2>
+                <p>These readings refresh automatically while the delivery is active.</p>
             </div>
 
             <div class="last-reading-card">
@@ -212,7 +190,9 @@
                     <strong id="liveTemperature" aria-live="polite">
                         {{ $temperatureValue !== null ? $temperatureValue . ' °C' : 'No Data' }}
                     </strong>
-                    <small id="liveTemperatureStatus">{{ $temperatureStatus }}</small>
+                    <small id="liveTemperatureStatus">
+                        {{ $temperatureStatus }}{{ $isSimulatedTemperature ? ' · simulated API data' : '' }}
+                    </small>
                 </div>
             </article>
 
@@ -225,7 +205,10 @@
                     <span>Current GPS</span>
                     <strong id="liveGps" aria-live="polite">{{ $currentGpsText }}</strong>
                     <small id="liveGpsStatus">
-                        {{ $hasCurrentGps ? 'Latest saved vehicle position' : 'Waiting for ESP32 GPS signal' }}
+                        {{ $hasCurrentGps
+                            ? (($gpsSource ?? 'esp32') === 'software' ? 'Live device/API fix' : 'Verified ESP32 fix')
+                                . (isset($gpsAgeSeconds) ? ' · ' . $gpsAgeSeconds . 's ago' : '')
+                            : 'Waiting for a recent live-location fix' }}
                     </small>
                 </div>
             </article>
@@ -265,11 +248,9 @@
     <section class="eta-panel">
         <div class="section-title-row">
             <div>
-                <span class="section-kicker">ETA Tracking</span>
-                <h2>Estimated Arrival</h2>
-                <p>
-                    ETA is calculated inside ColdTrace using the current ESP32 GPS location and delivery destination.
-                </p>
+                <span class="section-kicker">Route timing</span>
+                <h2>Estimated arrival</h2>
+                <p>Start the route to calculate travel time and distance.</p>
             </div>
 
             <span class="eta-badge" id="etaStatusBadge">
@@ -304,18 +285,20 @@
         </div>
     </section>
 
-    <section class="ai-route-panel">
+    <section class="ai-route-panel is-collapsed" id="aiRoutePanel">
         <div class="section-title-row">
             <div>
-                <span class="section-kicker">AI Route Recommendation</span>
-                <h2>ColdTrace Route Decision</h2>
-                <p>
-                    ColdTrace evaluates GPS availability, distance, travel time, ETA,
-                    cargo temperature, backend-calculated MKT, and remaining shelf-life risk.
-                </p>
+                <span class="section-kicker">Advanced route analysis</span>
+                <h2>Route recommendation</h2>
+                <p>Compare route scores and request an AI explanation when needed.</p>
             </div>
 
             <div class="ai-header-actions">
+                <button type="button" class="secondary-button advanced-toggle" onclick="toggleRouteAnalysis(this)" aria-expanded="false" aria-controls="aiRouteAnalysisContent">
+                    <i class="bi bi-chevron-down"></i>
+                    <span>Show analysis</span>
+                </button>
+
                 <span class="ai-badge" id="aiRecommendationBadge">
                     Waiting for route
                 </span>
@@ -334,7 +317,7 @@
             </div>
         </div>
 
-        <div class="ai-grid">
+        <div class="ai-grid" id="aiRouteAnalysisContent">
             <div class="ai-card">
                 <span>Recommended Action</span>
                 <strong id="aiRecommendedAction">Start navigation to calculate route.</strong>
@@ -434,11 +417,9 @@
     <section class="map-panel">
         <div class="section-title-row">
             <div>
-                <span class="section-kicker">In-Page Navigation</span>
-                <h2>Live Route Map</h2>
-                <p>
-                    The driver stays inside ColdTrace. Only one vehicle marker, delivery point, ETA, and route guidance are shown here.
-                </p>
+                <span class="section-kicker">Navigation</span>
+                <h2>Route to destination</h2>
+                <p>Start the route to see directions from the latest vehicle position.</p>
             </div>
 
             <div class="map-legend">
@@ -515,52 +496,24 @@
         </div>
     </section>
 
-    <div class="content-grid">
-        <section class="details-panel">
-            <div class="section-title-row compact">
-                <div>
-                    <span class="section-kicker">Order Info</span>
-                    <h2>Delivery Details</h2>
+    <div class="content-grid driver-supporting-details">
+        @if ($order->notes)
+            <section class="details-panel">
+                <div class="section-title-row compact">
+                    <div>
+                        <span class="section-kicker">Instructions</span>
+                        <h2>Delivery notes</h2>
+                    </div>
                 </div>
-            </div>
-
-            <div class="details-grid">
-                <div class="detail-card">
-                    <span>Receiver</span>
-                    <strong>{{ $order->receiver?->name ?? 'N/A' }}</strong>
-                    <small>{{ $order->receiver?->phone ?? $order->receiver?->email ?? 'No contact' }}</small>
-                </div>
-
-                <div class="detail-card">
-                    <span>Expected Delivery</span>
-                    <strong>{{ $order->expected_delivery_at?->format('M d, Y') ?? 'Not set' }}</strong>
-                    <small>{{ $order->expected_delivery_at?->format('h:i A') ?? 'No time provided' }}</small>
-                </div>
-
-                <div class="detail-card">
-                    <span>Status</span>
-                    <strong>{{ ucfirst(str_replace('_', ' ', $order->status)) }}</strong>
-                    <small>Assigned to your driver account</small>
-                </div>
-
-                <div class="detail-card">
-                    <span>Created By</span>
-                    <strong>{{ $order->creator?->name ?? 'N/A' }}</strong>
-                    <small>{{ $order->created_at?->format('M d, Y h:i A') ?? 'N/A' }}</small>
-                </div>
-
-                <div class="detail-card full-width">
-                    <span>Handling Notes</span>
-                    <strong>{{ $order->notes ?: 'No notes provided.' }}</strong>
-                </div>
-            </div>
-        </section>
+                <p class="driver-delivery-note">{{ $order->notes }}</p>
+            </section>
+        @endif
 
         <section class="products-panel">
             <div class="section-title-row compact">
                 <div>
                     <span class="section-kicker">Cargo</span>
-                    <h2>Products</h2>
+                    <h2>Items to deliver</h2>
                 </div>
             </div>
 
@@ -568,22 +521,15 @@
                 @forelse ($order->orderItems as $item)
                     <div class="product-row">
                         <div>
-                            <strong>{{ $item->product?->name ?? 'N/A' }}</strong>
-
-                            <small>
-                                Safe range:
-                                {{ $item->product?->min_temp ?? 'N/A' }}°C
-                                to
-                                {{ $item->product?->max_temp ?? 'N/A' }}°C
-                            </small>
+                            <strong>{{ $item->product?->name ?? 'Product unavailable' }}</strong>
+                            @if ($item->product)
+                                <small>Safe range {{ $item->product->min_temp }}°C–{{ $item->product->max_temp }}°C</small>
+                            @endif
                         </div>
-
                         <em>{{ $item->quantity }} {{ $item->unit }}</em>
                     </div>
                 @empty
-                    <div class="empty-box">
-                        No products listed.
-                    </div>
+                    <div class="empty-box">No products listed.</div>
                 @endforelse
             </div>
         </section>
@@ -615,1540 +561,6 @@
 
 @endsection
 
-@push('styles')
-<style>
-    *,
-    *::before,
-    *::after {
-        box-sizing: border-box;
-    }
-
-    .driver-order-show-page {
-        --ct-blue: #2563eb;
-        --ct-cyan: #06b6d4;
-        --ct-green: #16a34a;
-        --ct-amber: #f59e0b;
-        --ct-red: #dc2626;
-        --ct-slate-50: #f8fafc;
-        --ct-slate-100: #f1f5f9;
-        --ct-slate-200: #e2e8f0;
-        --ct-slate-300: #cbd5e1;
-        --ct-slate-500: #64748b;
-        --ct-slate-600: #475569;
-        --ct-slate-900: #0f172a;
-        display: flex;
-        flex-direction: column;
-        gap: clamp(16px, 2vw, 22px);
-        width: 100%;
-        max-width: 100%;
-        color: var(--ct-slate-900);
-    }
-
-    .driver-order-show-page button,
-    .driver-order-show-page a,
-    .driver-order-show-page input,
-    .driver-order-show-page select,
-    .driver-order-show-page textarea {
-        -webkit-tap-highlight-color: transparent;
-    }
-
-    .hero-panel,
-    .driver-quick-summary,
-    .live-panel,
-    .map-panel,
-    .details-panel,
-    .products-panel,
-    .raw-panel,
-    .ai-route-panel,
-    .eta-panel {
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
-        border-radius: clamp(20px, 2.4vw, 28px);
-        box-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
-    }
-
-    .hero-panel {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        align-items: end;
-        gap: 22px;
-        padding: clamp(20px, 2.4vw, 28px);
-        background:
-            radial-gradient(circle at top left, rgba(34, 211, 238, 0.22), transparent 38%),
-            linear-gradient(135deg, #ffffff, #f8fafc);
-    }
-
-    .hero-left {
-        min-width: 0;
-    }
-
-    .eyebrow,
-    .section-kicker {
-        display: inline-flex;
-        align-items: center;
-        width: fit-content;
-        border-radius: 999px;
-        font-size: 12px;
-        font-weight: 900;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-    }
-
-    .eyebrow {
-        background: #ecfeff;
-        color: #0891b2;
-        border: 1px solid #cffafe;
-        padding: 7px 12px;
-        margin-bottom: 12px;
-    }
-
-    .section-kicker {
-        color: var(--ct-blue);
-        margin-bottom: 8px;
-    }
-
-    .hero-panel h1 {
-        margin: 0;
-        color: var(--ct-slate-900);
-        font-size: clamp(28px, 5vw, 38px);
-        line-height: 1.04;
-        font-weight: 950;
-        letter-spacing: -0.055em;
-        overflow-wrap: anywhere;
-    }
-
-    .hero-panel p {
-        margin: 12px 0 0;
-        color: var(--ct-slate-500);
-        line-height: 1.65;
-        max-width: 760px;
-    }
-
-    .hero-tags,
-    .hero-actions,
-    .map-legend {
-        display: flex;
-        gap: 10px;
-        align-items: center;
-        flex-wrap: wrap;
-    }
-
-    .hero-tags {
-        margin-top: 18px;
-    }
-
-    .hero-actions {
-        justify-content: flex-end;
-        min-width: 300px;
-    }
-
-    .primary-button,
-    .secondary-button,
-    .copy-location-button,
-    .mobile-driver-action-bar a,
-    .mobile-driver-action-bar button {
-        border: 0;
-        cursor: pointer;
-        text-decoration: none;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        min-height: 46px;
-        border-radius: 999px;
-        padding: 0 18px;
-        font-weight: 950;
-        font-size: 14px;
-        transition: transform 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
-        white-space: nowrap;
-    }
-
-    .primary-button {
-        background: linear-gradient(135deg, #2563eb, #06b6d4);
-        color: #ffffff;
-        box-shadow: 0 12px 24px rgba(37, 99, 235, 0.22);
-    }
-
-    .secondary-button {
-        background: #f1f5f9;
-        color: #0f172a;
-        border: 1px solid #e2e8f0;
-    }
-
-    .primary-button:active,
-    .secondary-button:active,
-    .copy-location-button:active,
-    .mobile-driver-action-bar a:active,
-    .mobile-driver-action-bar button:active {
-        transform: scale(0.98);
-    }
-
-    .soft-chip,
-    .panel-chip,
-    .ai-badge,
-    .eta-badge {
-        display: inline-flex;
-        align-items: center;
-        border-radius: 999px;
-        background: var(--ct-slate-50);
-        color: var(--ct-slate-600);
-        border: 1px solid var(--ct-slate-200);
-        padding: 7px 11px;
-        font-size: 12px;
-        font-weight: 900;
-        max-width: 100%;
-        overflow-wrap: anywhere;
-    }
-
-    .ai-badge.good,
-    .eta-badge.good {
-        background: #f0fdf4;
-        color: #15803d;
-        border-color: #bbf7d0;
-    }
-
-    .ai-badge.warning,
-    .eta-badge.warning {
-        background: #fffbeb;
-        color: #d97706;
-        border-color: #fde68a;
-    }
-
-    .ai-badge.critical,
-    .eta-badge.critical {
-        background: #fef2f2;
-        color: var(--ct-red);
-        border-color: #fecaca;
-    }
-
-    #telemetryConnectionChip.connected {
-        background: #f0fdf4;
-        color: #15803d;
-        border-color: #bbf7d0;
-    }
-
-    #telemetryConnectionChip.error {
-        background: #fef2f2;
-        color: var(--ct-red);
-        border-color: #fecaca;
-    }
-
-    .driver-quick-summary {
-        display: grid;
-        grid-template-columns: 1.25fr 0.9fr 0.9fr 0.9fr;
-        gap: 14px;
-        padding: 16px;
-    }
-
-    .quick-card,
-    .telemetry-card,
-    .ai-card,
-    .eta-card,
-    .location-card,
-    .detail-card,
-    .product-row {
-        min-width: 0;
-    }
-
-    .quick-card {
-        border-radius: 22px;
-        border: 1px solid #e5e7eb;
-        background:
-            radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 45%),
-            #f8fafc;
-        padding: 16px;
-    }
-
-    .quick-card.destination {
-        background:
-            radial-gradient(circle at top right, rgba(37, 99, 235, 0.11), transparent 45%),
-            #eff6ff;
-        border-color: #bfdbfe;
-    }
-
-    .quick-card.receiver {
-        background:
-            radial-gradient(circle at top right, rgba(6, 182, 212, 0.11), transparent 45%),
-            #ecfeff;
-        border-color: #a5f3fc;
-    }
-
-    .quick-card.schedule {
-        background:
-            radial-gradient(circle at top right, rgba(245, 158, 11, 0.10), transparent 45%),
-            #fffbeb;
-        border-color: #fde68a;
-    }
-
-    .quick-card.temperature.safe {
-        background: #f0fdf4;
-        border-color: #bbf7d0;
-    }
-
-    .quick-card.temperature.warning {
-        background: #fffbeb;
-        border-color: #fde68a;
-    }
-
-    .quick-card.temperature.critical {
-        background: #fef2f2;
-        border-color: #fecaca;
-    }
-
-    .quick-card span,
-    .telemetry-card span,
-    .ai-card span,
-    .eta-card span,
-    .location-card span,
-    .detail-card span {
-        display: block;
-        color: var(--ct-slate-500);
-        font-size: 11px;
-        font-weight: 950;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        margin-bottom: 8px;
-    }
-
-    .quick-card strong,
-    .telemetry-card strong,
-    .ai-card strong,
-    .eta-card strong,
-    .location-card strong,
-    .detail-card strong {
-        display: block;
-        color: var(--ct-slate-900);
-        font-weight: 950;
-        line-height: 1.3;
-        overflow-wrap: anywhere;
-    }
-
-    .quick-card strong {
-        font-size: 16px;
-    }
-
-    .quick-card small,
-    .telemetry-card small,
-    .ai-card small,
-    .eta-card small,
-    .location-card small,
-    .detail-card small {
-        display: block;
-        margin-top: 7px;
-        color: var(--ct-slate-500);
-        font-size: 12px;
-        font-weight: 800;
-        line-height: 1.45;
-        overflow-wrap: anywhere;
-    }
-
-    .live-panel,
-    .map-panel,
-    .details-panel,
-    .products-panel,
-    .raw-panel,
-    .ai-route-panel,
-    .eta-panel {
-        padding: clamp(18px, 2vw, 24px);
-    }
-
-    .section-title-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 18px;
-        margin-bottom: 18px;
-    }
-
-    .section-title-row.compact {
-        margin-bottom: 14px;
-    }
-
-    .section-title-row h2 {
-        margin: 0;
-        color: var(--ct-slate-900);
-        font-size: clamp(20px, 2.6vw, 22px);
-        font-weight: 950;
-        letter-spacing: -0.04em;
-    }
-
-    .section-title-row p {
-        margin: 6px 0 0;
-        color: var(--ct-slate-500);
-        line-height: 1.6;
-    }
-
-    .last-reading-card {
-        min-width: 230px;
-        border-radius: 18px;
-        background: var(--ct-slate-50);
-        border: 1px solid #e5e7eb;
-        padding: 13px 15px;
-        text-align: right;
-    }
-
-    .last-reading-card span {
-        display: block;
-        color: var(--ct-slate-500);
-        font-size: 11px;
-        font-weight: 900;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        margin-bottom: 5px;
-    }
-
-    .last-reading-card strong {
-        color: var(--ct-slate-900);
-        font-size: 13px;
-        font-weight: 900;
-    }
-
-    .telemetry-grid,
-    .ai-grid,
-    .eta-grid {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 16px;
-    }
-
-    .telemetry-card,
-    .ai-card,
-    .eta-card {
-        min-height: 150px;
-        border-radius: 24px;
-        border: 1px solid #e5e7eb;
-        background:
-            radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 45%),
-            #f8fafc;
-        padding: 18px;
-    }
-
-    .telemetry-card {
-        display: flex;
-        gap: 14px;
-        align-items: flex-start;
-    }
-
-
-
-    .telemetry-copy {
-        min-width: 0;
-        flex: 1;
-    }
-
-    .telemetry-card {
-        position: relative;
-        overflow: hidden;
-        isolation: isolate;
-    }
-
-    .telemetry-card::after {
-        content: '';
-        position: absolute;
-        width: 110px;
-        height: 110px;
-        right: -48px;
-        bottom: -58px;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.48);
-        z-index: -1;
-    }
-
-    .telemetry-card.mkt-card {
-        background:
-            radial-gradient(circle at top right, rgba(124, 58, 237, 0.13), transparent 44%),
-            #faf5ff;
-        border-color: #ddd6fe;
-    }
-
-    .telemetry-card.mkt-card .telemetry-icon {
-        background: linear-gradient(135deg, #7c3aed, #8b5cf6);
-        box-shadow: 0 12px 22px rgba(124, 58, 237, 0.2);
-    }
-
-    .telemetry-card.rsl-card.good,
-    .ai-rsl-card.good {
-        background: #f0fdf4;
-        border-color: #bbf7d0;
-    }
-
-    .telemetry-card.rsl-card.good .telemetry-icon {
-        background: linear-gradient(135deg, #16a34a, #15803d);
-    }
-
-    .telemetry-card.rsl-card.warning,
-    .ai-rsl-card.warning {
-        background: #fffbeb;
-        border-color: #fde68a;
-    }
-
-    .telemetry-card.rsl-card.warning .telemetry-icon {
-        background: linear-gradient(135deg, #f59e0b, #d97706);
-    }
-
-    .telemetry-card.rsl-card.critical,
-    .ai-rsl-card.critical {
-        background: #fef2f2;
-        border-color: #fecaca;
-    }
-
-    .telemetry-card.rsl-card.critical .telemetry-icon {
-        background: linear-gradient(135deg, #ef4444, #dc2626);
-    }
-
-    .telemetry-card.rsl-card.neutral {
-        background: #f8fafc;
-        border-color: #e2e8f0;
-    }
-
-    .telemetry-card.rsl-card.good strong,
-    .telemetry-card.rsl-card.good small,
-    .ai-rsl-card.good strong,
-    .ai-rsl-card.good small {
-        color: #15803d;
-    }
-
-    .telemetry-card.rsl-card.warning strong,
-    .telemetry-card.rsl-card.warning small,
-    .ai-rsl-card.warning strong,
-    .ai-rsl-card.warning small {
-        color: #b45309;
-    }
-
-    .telemetry-card.rsl-card.critical strong,
-    .telemetry-card.rsl-card.critical small,
-    .ai-rsl-card.critical strong,
-    .ai-rsl-card.critical small {
-        color: #dc2626;
-    }
-
-    .eta-card {
-        background:
-            radial-gradient(circle at top right, rgba(6, 182, 212, 0.10), transparent 45%),
-            #f8fafc;
-    }
-
-    .telemetry-icon {
-        width: 48px;
-        height: 48px;
-        min-width: 48px;
-        border-radius: 17px;
-        background: linear-gradient(135deg, #2563eb, #06b6d4);
-        color: #ffffff;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 22px;
-        box-shadow: 0 12px 22px rgba(37, 99, 235, 0.22);
-    }
-
-    .telemetry-card strong,
-    .ai-card strong,
-    .eta-card strong {
-        font-size: clamp(19px, 2.6vw, 22px);
-    }
-
-    .telemetry-card.safe,
-    .quick-card.temperature.safe {
-        background: #f0fdf4;
-        border-color: #bbf7d0;
-    }
-
-    .telemetry-card.safe .telemetry-icon {
-        background: linear-gradient(135deg, #16a34a, #15803d);
-    }
-
-    .telemetry-card.safe strong,
-    .telemetry-card.safe small,
-    .quick-card.temperature.safe strong,
-    .quick-card.temperature.safe small {
-        color: #15803d;
-    }
-
-    .telemetry-card.warning,
-    .quick-card.temperature.warning {
-        background: #fffbeb;
-        border-color: #fde68a;
-    }
-
-    .telemetry-card.warning .telemetry-icon {
-        background: linear-gradient(135deg, #f59e0b, #d97706);
-    }
-
-    .telemetry-card.warning strong,
-    .telemetry-card.warning small,
-    .quick-card.temperature.warning strong,
-    .quick-card.temperature.warning small {
-        color: #d97706;
-    }
-
-    .telemetry-card.critical,
-    .quick-card.temperature.critical {
-        background: #fef2f2;
-        border-color: #fecaca;
-    }
-
-    .telemetry-card.critical .telemetry-icon {
-        background: linear-gradient(135deg, #ef4444, #dc2626);
-    }
-
-    .telemetry-card.critical strong,
-    .telemetry-card.critical small,
-    .quick-card.temperature.critical strong,
-    .quick-card.temperature.critical small {
-        color: var(--ct-red);
-    }
-
-    .risk-card.warning {
-        background: #fffbeb;
-        border-color: #fde68a;
-    }
-
-    .risk-card.critical {
-        background: #fef2f2;
-        border-color: #fecaca;
-    }
-
-    .risk-card.good {
-        background: #f0fdf4;
-        border-color: #bbf7d0;
-    }
-
-    .ai-header-actions {
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        gap: 10px;
-        flex-wrap: wrap;
-    }
-
-    .route-score-button {
-        min-height: 38px;
-        padding: 0 14px;
-        font-size: 12px;
-    }
-
-    .route-score-modal {
-        position: fixed;
-        inset: 0;
-        z-index: 2000;
-        display: none;
-        align-items: center;
-        justify-content: center;
-        padding: 18px;
-    }
-
-    .route-score-modal.show {
-        display: flex;
-    }
-
-    .route-score-backdrop {
-        position: absolute;
-        inset: 0;
-        background: rgba(15, 23, 42, 0.58);
-        backdrop-filter: blur(6px);
-    }
-
-    .route-score-dialog {
-        position: relative;
-        z-index: 1;
-        width: min(1100px, 100%);
-        max-height: min(86vh, 760px);
-        overflow: hidden;
-        border-radius: 26px;
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
-        box-shadow: 0 30px 80px rgba(15, 23, 42, 0.35);
-        display: flex;
-        flex-direction: column;
-    }
-
-    .route-score-header {
-        padding: 22px;
-        border-bottom: 1px solid #e5e7eb;
-        display: flex;
-        justify-content: space-between;
-        gap: 18px;
-        align-items: flex-start;
-    }
-
-    .route-score-header h2 {
-        margin: 0;
-        font-size: 22px;
-        font-weight: 950;
-        color: #0f172a;
-        letter-spacing: -0.04em;
-    }
-
-    .route-score-header p {
-        margin: 8px 0 0;
-        color: #64748b;
-        font-weight: 750;
-        line-height: 1.55;
-    }
-
-    .route-score-close {
-        width: 42px;
-        height: 42px;
-        min-width: 42px;
-        border-radius: 999px;
-        border: 1px solid #e2e8f0;
-        background: #f8fafc;
-        color: #0f172a;
-        cursor: pointer;
-    }
-
-    .formula-box {
-        margin: 18px 22px 0;
-        padding: 16px;
-        border-radius: 20px;
-        background: #eff6ff;
-        border: 1px solid #bfdbfe;
-    }
-
-    .formula-box strong {
-        display: block;
-        color: #1d4ed8;
-        font-size: 12px;
-        font-weight: 950;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        margin-bottom: 8px;
-    }
-
-    .formula-box p {
-        margin: 0;
-        color: #0f172a;
-        font-weight: 900;
-        line-height: 1.6;
-    }
-
-    .formula-box small {
-        display: block;
-        margin-top: 8px;
-        color: #475569;
-        font-weight: 800;
-        line-height: 1.55;
-    }
-
-    .route-score-table-wrap {
-        margin: 18px 22px 22px;
-        overflow: auto;
-        border-radius: 18px;
-        border: 1px solid #e5e7eb;
-    }
-
-    .route-score-table {
-        width: 100%;
-        border-collapse: collapse;
-        min-width: 920px;
-        background: #ffffff;
-    }
-
-    .route-score-table th,
-    .route-score-table td {
-        padding: 13px 14px;
-        border-bottom: 1px solid #e5e7eb;
-        text-align: left;
-        font-size: 13px;
-    }
-
-    .route-score-table th {
-        background: #f8fafc;
-        color: #475569;
-        font-size: 11px;
-        font-weight: 950;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }
-
-    .route-score-table td {
-        color: #0f172a;
-        font-weight: 850;
-    }
-
-    .route-score-table tr.recommended-row td {
-        background: #f0fdf4;
-        color: #15803d;
-    }
-
-    .location-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 14px;
-        margin-bottom: 16px;
-    }
-
-    .location-card,
-    .detail-card {
-        border-radius: 20px;
-        border: 1px solid #e5e7eb;
-        background: #f8fafc;
-        padding: 16px;
-    }
-
-    .location-card-top {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-        margin-bottom: 4px;
-    }
-
-    .location-card-top span {
-        margin-bottom: 0;
-    }
-
-    .copy-location-button {
-        min-height: 34px;
-        padding: 0 12px;
-        font-size: 12px;
-        background: #ffffff;
-        color: #2563eb;
-        border: 1px solid #bfdbfe;
-        box-shadow: none;
-    }
-
-
-    .current-card {
-        background: #f0fdf4;
-        border-color: #bbf7d0;
-    }
-
-    .delivery-card {
-        background: #eff6ff;
-        border-color: #bfdbfe;
-    }
-
-    .navigation-layout {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
-        gap: 16px;
-        align-items: stretch;
-    }
-
-    #driverOrderMap {
-        width: 100%;
-        min-height: 360px;
-        height: min(68vh, 620px);
-        border-radius: 24px;
-        overflow: hidden;
-        background: #e2e8f0;
-        border: 1px solid #e5e7eb;
-        touch-action: pan-x pan-y;
-    }
-
-    .route-panel {
-        height: min(68vh, 620px);
-        min-height: 360px;
-        overflow: hidden;
-        border-radius: 24px;
-        border: 1px solid #e5e7eb;
-        background: #f8fafc;
-        display: flex;
-        flex-direction: column;
-    }
-
-    .route-panel-header {
-        padding: 18px;
-        border-bottom: 1px solid #e5e7eb;
-        background: #ffffff;
-        flex-shrink: 0;
-    }
-
-    .route-panel-header span {
-        display: block;
-        color: #2563eb;
-        font-size: 11px;
-        font-weight: 950;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        margin-bottom: 6px;
-    }
-
-    .route-panel-header strong {
-        display: block;
-        color: #0f172a;
-        font-size: 17px;
-        font-weight: 950;
-        overflow-wrap: anywhere;
-    }
-
-    .route-panel-header small {
-        display: block;
-        color: #64748b;
-        font-size: 12px;
-        font-weight: 750;
-        margin-top: 5px;
-        overflow-wrap: anywhere;
-    }
-
-    .alternate-route-section {
-        padding: 14px;
-        border-bottom: 1px solid #e5e7eb;
-        background: #f8fafc;
-        flex-shrink: 0;
-    }
-
-    .alternate-route-section-title {
-        display: grid;
-        gap: 4px;
-        margin-bottom: 10px;
-    }
-
-    .alternate-route-section-title span {
-        color: #2563eb;
-        font-size: 11px;
-        font-weight: 950;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }
-
-    .alternate-route-section-title small {
-        color: #64748b;
-        font-size: 11px;
-        font-weight: 800;
-        line-height: 1.45;
-    }
-
-    .alternate-route-list {
-        display: grid;
-        gap: 9px;
-    }
-
-    .alternate-route-card {
-        width: 100%;
-        border: 1px solid #e5e7eb;
-        background: #ffffff;
-        border-radius: 16px;
-        padding: 12px;
-        display: flex;
-        align-items: flex-start;
-        gap: 10px;
-        text-align: left;
-        cursor: pointer;
-    }
-
-    .alternate-route-card.active {
-        background: #eff6ff;
-        border-color: #bfdbfe;
-        box-shadow: 0 10px 22px rgba(37, 99, 235, 0.12);
-    }
-
-    .alternate-route-rank {
-        width: 30px;
-        height: 30px;
-        min-width: 30px;
-        border-radius: 11px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        background: linear-gradient(135deg, #2563eb, #06b6d4);
-        color: #ffffff;
-        font-size: 12px;
-        font-weight: 950;
-    }
-
-    .alternate-route-card:not(.active) .alternate-route-rank {
-        background: #e2e8f0;
-        color: #0f172a;
-    }
-
-    .alternate-route-body {
-        min-width: 0;
-        display: block;
-    }
-
-    .alternate-route-body strong {
-        display: block;
-        color: #0f172a;
-        font-size: 13px;
-        font-weight: 950;
-        overflow-wrap: anywhere;
-    }
-
-    .alternate-route-body small,
-    .alternate-route-body em {
-        display: block;
-        color: #64748b;
-        font-size: 11px;
-        font-style: normal;
-        font-weight: 800;
-        line-height: 1.45;
-        margin-top: 4px;
-        overflow-wrap: anywhere;
-    }
-
-    .alternate-route-body em {
-        color: #2563eb;
-    }
-
-    .route-steps {
-        overflow-y: auto;
-        -webkit-overflow-scrolling: touch;
-        padding: 14px;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-    }
-
-    .route-step {
-        padding: 14px;
-        border-radius: 16px;
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
-    }
-
-    .route-step strong {
-        display: block;
-        color: #0f172a;
-        font-size: 13px;
-        font-weight: 900;
-        line-height: 1.45;
-    }
-
-    .route-step small {
-        display: block;
-        color: #64748b;
-        font-size: 11px;
-        font-weight: 750;
-        margin-top: 6px;
-    }
-
-    .empty-route {
-        padding: 18px;
-        border-radius: 18px;
-        background: #ffffff;
-        color: #64748b;
-        font-size: 13px;
-        font-weight: 800;
-        line-height: 1.6;
-    }
-
-    .legend-dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 999px;
-        display: inline-flex;
-        margin-right: 6px;
-    }
-
-
-    .legend-dot.current {
-        background: #16a34a;
-    }
-
-    .legend-dot.delivery {
-        background: #2563eb;
-    }
-
-    .map-legend span {
-        color: #475569;
-        font-size: 12px;
-        font-weight: 900;
-        display: inline-flex;
-        align-items: center;
-    }
-
-    .content-grid {
-        display: grid;
-        grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
-        gap: 22px;
-    }
-
-    .details-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 14px;
-    }
-
-    .detail-card.full-width {
-        grid-column: 1 / -1;
-    }
-
-    .product-list {
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-    }
-
-    .product-row {
-        display: flex;
-        justify-content: space-between;
-        gap: 14px;
-        align-items: center;
-        padding: 14px;
-        border-radius: 18px;
-        background: #f8fafc;
-        border: 1px solid #e5e7eb;
-    }
-
-    .product-row strong {
-        display: block;
-        color: #0f172a;
-        font-size: 15px;
-        font-weight: 950;
-        overflow-wrap: anywhere;
-    }
-
-    .product-row small {
-        display: block;
-        color: #64748b;
-        margin-top: 5px;
-        font-size: 12px;
-        font-weight: 750;
-    }
-
-    .product-row em {
-        color: #2563eb;
-        background: #eff6ff;
-        border: 1px solid #bfdbfe;
-        border-radius: 999px;
-        padding: 7px 11px;
-        font-size: 12px;
-        font-style: normal;
-        font-weight: 950;
-        white-space: nowrap;
-    }
-
-    .status-badge {
-        display: inline-flex;
-        border-radius: 999px;
-        padding: 7px 11px;
-        font-size: 12px;
-        font-weight: 950;
-        white-space: nowrap;
-    }
-
-    .status-pending {
-        background: #fffbeb;
-        color: #d97706;
-    }
-
-    .status-approved {
-        background: #eff6ff;
-        color: #2563eb;
-    }
-
-    .status-assigned,
-    .status-in_transit {
-        background: #ecfeff;
-        color: #0891b2;
-    }
-
-    .status-delivered {
-        background: #f0fdf4;
-        color: #15803d;
-    }
-
-    .status-cancelled {
-        background: #fef2f2;
-        color: #dc2626;
-    }
-
-    .warning-box {
-        background: #fffbeb;
-        color: #92400e;
-        border: 1px solid #fde68a;
-        padding: 14px 16px;
-        border-radius: 16px;
-        margin-bottom: 16px;
-        font-size: 14px;
-        font-weight: 800;
-        line-height: 1.5;
-    }
-
-    .empty-box {
-        border-radius: 18px;
-        background: #f8fafc;
-        border: 1px solid #e5e7eb;
-        color: #64748b;
-        padding: 18px;
-        font-weight: 800;
-    }
-
-    .raw-panel {
-        padding: 0;
-        overflow: hidden;
-    }
-
-    .debug-details {
-        padding: 0;
-    }
-
-    .debug-details summary {
-        list-style: none;
-        cursor: pointer;
-        padding: 18px 22px;
-        display: grid;
-        grid-template-columns: 1fr;
-        gap: 4px;
-        background: #ffffff;
-    }
-
-    .debug-details summary::-webkit-details-marker {
-        display: none;
-    }
-
-    .debug-details summary span {
-        color: #2563eb;
-        font-size: 11px;
-        font-weight: 950;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }
-
-    .debug-details summary strong {
-        color: #0f172a;
-        font-size: 17px;
-        font-weight: 950;
-    }
-
-    .debug-details summary small {
-        color: #64748b;
-        font-weight: 750;
-    }
-
-    #liveRawJson {
-        margin: 0 18px 18px;
-        background: #0f172a;
-        color: #22c55e;
-        border-radius: 18px;
-        padding: 18px;
-        font-size: 13px;
-        line-height: 1.6;
-        overflow-x: auto;
-        min-height: 160px;
-        max-height: 420px;
-    }
-
-    .mobile-driver-action-bar {
-        display: none;
-    }
-
-    @media (max-width: 1240px) {
-        .driver-quick-summary {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-
-        .navigation-layout {
-            grid-template-columns: 1fr;
-        }
-
-        .route-panel {
-            height: auto;
-            max-height: 520px;
-        }
-
-        #driverOrderMap {
-            height: 520px;
-        }
-    }
-
-    @media (max-width: 1180px) {
-        .telemetry-grid,
-        .ai-grid,
-        .eta-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-
-        .content-grid {
-            grid-template-columns: 1fr;
-        }
-    }
-
-    @media (max-width: 960px) {
-        .hero-panel {
-            grid-template-columns: 1fr;
-            align-items: start;
-        }
-
-        .hero-actions {
-            justify-content: flex-start;
-            min-width: 0;
-            width: 100%;
-        }
-
-        .section-title-row {
-            flex-direction: column;
-            align-items: flex-start;
-        }
-
-        .last-reading-card {
-            text-align: left;
-            width: 100%;
-            min-width: 0;
-        }
-
-        .location-grid,
-        .details-grid {
-            grid-template-columns: 1fr;
-        }
-    }
-
-    @media (max-width: 760px) {
-        .driver-order-show-page {
-            padding-bottom: calc(86px + env(safe-area-inset-bottom));
-            gap: 16px;
-        }
-
-        .hero-panel,
-        .driver-quick-summary,
-        .live-panel,
-        .map-panel,
-        .details-panel,
-        .products-panel,
-        .ai-route-panel,
-        .eta-panel {
-            border-radius: 22px;
-        }
-
-        .hero-panel,
-        .live-panel,
-        .map-panel,
-        .details-panel,
-        .products-panel,
-        .ai-route-panel,
-        .eta-panel {
-            padding: 18px;
-        }
-
-        .hero-panel p,
-        .section-title-row p {
-            font-size: 14px;
-        }
-
-        .hero-actions .primary-button,
-        .hero-actions .secondary-button {
-            flex: 1 1 calc(50% - 8px);
-            min-width: 140px;
-        }
-
-        .driver-quick-summary,
-        .telemetry-grid,
-        .ai-grid,
-        .eta-grid {
-            grid-template-columns: 1fr;
-        }
-
-        .quick-card,
-        .telemetry-card,
-        .ai-card,
-        .eta-card,
-        .location-card,
-        .detail-card,
-        .product-row {
-            border-radius: 18px;
-        }
-
-        .telemetry-card,
-        .ai-card,
-        .eta-card {
-            min-height: 0;
-            padding: 16px;
-        }
-
-        .telemetry-card {
-            align-items: center;
-        }
-
-        .telemetry-icon {
-            width: 44px;
-            height: 44px;
-            min-width: 44px;
-            border-radius: 15px;
-            font-size: 20px;
-        }
-
-        .map-legend {
-            width: 100%;
-        }
-
-        .ai-header-actions {
-            width: 100%;
-            justify-content: flex-start;
-        }
-
-        .route-score-dialog {
-            max-height: 90vh;
-            border-radius: 20px;
-        }
-
-        .route-score-header {
-            padding: 18px;
-        }
-
-        .formula-box,
-        .route-score-table-wrap {
-            margin-left: 18px;
-            margin-right: 18px;
-        }
-
-        #driverOrderMap {
-            height: 430px;
-            border-radius: 20px;
-        }
-
-        .route-panel {
-            min-height: 0;
-            max-height: none;
-            border-radius: 20px;
-        }
-
-        .route-steps {
-            max-height: 360px;
-        }
-
-        .product-row {
-            flex-direction: column;
-            align-items: flex-start;
-        }
-
-        .product-row em {
-            white-space: normal;
-        }
-
-        .debug-details summary {
-            padding: 16px 18px;
-        }
-
-        #liveRawJson {
-            margin: 0 14px 14px;
-            max-height: 320px;
-            font-size: 12px;
-        }
-
-        .mobile-driver-action-bar {
-            position: fixed;
-            left: 12px;
-            right: 12px;
-            bottom: calc(12px + env(safe-area-inset-bottom));
-            z-index: 999;
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
-            gap: 8px;
-            padding: 10px;
-            border-radius: 24px;
-            background: rgba(255, 255, 255, 0.94);
-            border: 1px solid rgba(226, 232, 240, 0.95);
-            box-shadow: 0 18px 42px rgba(15, 23, 42, 0.22);
-            backdrop-filter: blur(12px);
-        }
-
-        .mobile-driver-action-bar a,
-        .mobile-driver-action-bar button {
-            min-height: 50px;
-            padding: 0 10px;
-            border-radius: 18px;
-            background: #f1f5f9;
-            color: #0f172a;
-            border: 1px solid #e2e8f0;
-            font-size: 12px;
-            flex-direction: column;
-            gap: 4px;
-        }
-
-        .mobile-driver-action-bar button {
-            background: linear-gradient(135deg, #2563eb, #06b6d4);
-            color: #ffffff;
-            box-shadow: 0 10px 20px rgba(37, 99, 235, 0.22);
-        }
-    }
-
-    @media (max-width: 480px) {
-        .hero-panel,
-        .driver-quick-summary,
-        .live-panel,
-        .map-panel,
-        .details-panel,
-        .products-panel,
-        .raw-panel,
-        .ai-route-panel,
-        .eta-panel {
-            border-radius: 18px;
-        }
-
-        .hero-panel,
-        .live-panel,
-        .map-panel,
-        .details-panel,
-        .products-panel,
-        .ai-route-panel,
-        .eta-panel {
-            padding: 15px;
-        }
-
-        .driver-quick-summary {
-            padding: 12px;
-        }
-
-        .hero-panel h1 {
-            font-size: 26px;
-        }
-
-        .hero-actions .primary-button,
-        .hero-actions .secondary-button {
-            flex-basis: 100%;
-            width: 100%;
-        }
-
-        .hero-tags,
-        .map-legend {
-            gap: 8px;
-        }
-
-        .soft-chip,
-        .status-badge,
-        .ai-badge,
-        .eta-badge {
-            font-size: 11px;
-            padding: 6px 9px;
-        }
-
-        .section-title-row h2 {
-            font-size: 19px;
-        }
-
-        .quick-card strong,
-        .location-card strong,
-        .detail-card strong {
-            font-size: 14px;
-        }
-
-        .telemetry-card strong,
-        .ai-card strong,
-        .eta-card strong {
-            font-size: 18px;
-        }
-
-        #driverOrderMap {
-            height: 360px;
-        }
-
-        .route-step,
-        .empty-route {
-            padding: 13px;
-        }
-
-        .mobile-driver-action-bar {
-            left: 8px;
-            right: 8px;
-            bottom: calc(8px + env(safe-area-inset-bottom));
-            border-radius: 20px;
-        }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-        .primary-button,
-        .secondary-button,
-        .copy-location-button,
-        .mobile-driver-action-bar a,
-        .mobile-driver-action-bar button {
-            transition: none;
-        }
-    }
-</style>
-@endpush
 
 @push('scripts')
 <script>
@@ -2389,6 +801,31 @@
         }
     }
 
+    function toggleRouteAnalysis(button) {
+        const panel = document.getElementById('aiRoutePanel');
+
+        if (!panel) {
+            return;
+        }
+
+        const willOpen = panel.classList.contains('is-collapsed');
+        panel.classList.toggle('is-collapsed', !willOpen);
+        button?.setAttribute('aria-expanded', String(willOpen));
+
+        const label = button?.querySelector('span');
+        const icon = button?.querySelector('i');
+
+        if (label) {
+            label.textContent = willOpen ? 'Hide analysis' : 'Show analysis';
+        }
+
+        if (icon) {
+            icon.className = willOpen ? 'bi bi-chevron-up' : 'bi bi-chevron-down';
+        }
+    }
+
+    window.toggleRouteAnalysis = toggleRouteAnalysis;
+
     updateRslPanels(@json($rslHours));
 </script>
 
@@ -2492,6 +929,9 @@
 
 
 function createMarkerContent(type) {
+    if (type === 'current') {
+        return window.createColdTraceTruckMarker(@json($order->trip?->truck_id ?? auth()->user()->assignedTruck?->id));
+    }
     const marker = document.createElement('div');
 
     marker.style.width = '46px';
@@ -2506,14 +946,8 @@ function createMarkerContent(type) {
     marker.style.boxShadow = '0 10px 24px rgba(15, 23, 42, 0.26)';
     marker.style.border = '3px solid #ffffff';
 
-    if (type === 'current') {
-        marker.innerHTML = '🚌';
-        marker.style.background = 'linear-gradient(135deg, #16a34a, #15803d)';
-    } else {
-        marker.innerHTML = '📍';
-
-        marker.style.background = 'linear-gradient(135deg, #2563eb, #1d4ed8)';
-    }
+    marker.innerHTML = '📍';
+    marker.style.background = 'linear-gradient(135deg, #2563eb, #1d4ed8)';
 
     return marker;
 }
@@ -3659,6 +2093,10 @@ function createMarkerContent(type) {
                 data.temperature_class || null
             );
 
+            if (data.temperature_source === 'simulated') {
+                setText('liveTemperatureStatus', `${data.temperature_status || 'No Data'} · simulated API data`);
+            }
+
             setText('liveMkt', mkt === null ? 'N/A' : `${mkt.toFixed(2)} °C`);
             setText(
                 'liveMktStatus',
@@ -3673,8 +2111,15 @@ function createMarkerContent(type) {
                 const gpsText = `${latitude.toFixed(7)}, ${longitude.toFixed(7)}`;
 
                 setText('liveGps', gpsText);
-                setText('liveGpsStatus', 'Latest saved vehicle position');
-                setText('liveLocationName', 'Vehicle / ESP32 Location');
+                const locationLabel = data.location_source === 'software'
+                    ? 'Live device/API location'
+                    : 'Verified ESP32 location';
+                const gpsAge = Number(data.gps_age_seconds);
+
+                setText('liveGpsStatus', Number.isFinite(gpsAge)
+                    ? `${locationLabel} · ${Math.round(gpsAge)}s ago`
+                    : locationLabel);
+                setText('liveLocationName', locationLabel);
                 setText('liveLocationCoords', gpsText);
 
                 const gpsKey = `${latitude.toFixed(7)},${longitude.toFixed(7)}`;
@@ -3685,13 +2130,16 @@ function createMarkerContent(type) {
                 }
             } else {
                 setText('liveGps', 'No GPS reading yet');
-                setText('liveGpsStatus', 'Waiting for ESP32 GPS signal');
+                setText('liveGpsStatus', 'Waiting for a recent live-location fix');
                 setText('liveLocationName', 'No GPS yet');
                 setText('liveLocationCoords', 'No GPS reading yet');
             }
 
             setText('liveLastReading', formatTelemetryDate(data.recorded_at));
-            setTelemetryChip('Telemetry: Connected', 'connected');
+            setTelemetryChip(
+                data.temperature_source === 'simulated' ? 'Telemetry: Demo API' : 'Telemetry: Connected',
+                'connected'
+            );
 
             const readingChanged = data.recorded_at && data.recorded_at !== lastRecordedAt;
             lastRecordedAt = data.recorded_at || lastRecordedAt;

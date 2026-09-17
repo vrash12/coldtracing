@@ -4,20 +4,24 @@
 
 @section('content')
 
-<div class="orders-page">
+<div class="ct-index orders-page order-workflow-page">
 
-    <div class="page-toolbar">
+    <header class="ct-index-header page-toolbar">
         <div>
-            <h1>Edit Order</h1>
+            <small>Administrator workspace</small>
+            <h1>Edit {{ $order->order_code }}</h1>
+            <p>Update the request or assign the driver and schedule.</p>
         </div>
 
-        <a href="{{ route('orders.index') }}" class="secondary-button">
-            Back to Orders
+        <a href="{{ route('orders.show', $order) }}" class="ct-button ct-button-light secondary-button">
+            <i class="bi bi-arrow-left"></i>Order details
         </a>
-    </div>
+    </header>
+
+    <x-form-errors />
 
     <div class="form-panel">
-        <form method="POST" action="{{ route('orders.update', $order) }}">
+        <form method="POST" action="{{ route('orders.update', $order) }}" class="admin-order-form">
             @csrf
             @method('PUT')
 
@@ -25,7 +29,7 @@
                 'order' => $order,
                 'products' => $products,
                 'receivers' => $receivers,
-                'buttonText' => 'Update Order',
+                'buttonText' => 'Save changes',
             ])
         </form>
     </div>
@@ -33,7 +37,3 @@
 </div>
 
 @endsection
-
-@push('styles')
-@include('admin.orders.partials.styles')
-@endpush

@@ -3,9 +3,13 @@
 namespace App\Http\Controllers\Driver;
 
 use App\Http\Controllers\Controller;
+use App\Models\Device;
 use App\Models\Order;
 use App\Models\Trip;
 use App\Services\ColdChain\RouteRecommendationScoringService;
+use App\Services\ColdChain\SimulatedTemperatureService;
+use App\Services\ColdChain\TelemetryProcessingService;
+use App\Services\ColdChain\TemperatureStatusService;
 use App\Services\OpenAIRouteRecommendationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -14,6 +18,8 @@ use Illuminate\Support\Facades\Schema;
 
 class OrderController extends Controller
 {
+    private const MAX_GPS_AGE_SECONDS = 120;
+
     /**
      * Orders with these statuses are included in the driver's optimized route.
      * Delivered and cancelled orders are not included because they no longer need navigation.
@@ -96,16 +102,24 @@ class OrderController extends Controller
          */
         $telemetryTrip = $this->findLatestTelemetryTripForDriver();
         $latestTelemetry = $telemetryTrip?->latestTelemetry;
+        $gpsState = $this->freshGpsState($telemetryTrip);
+        $hasCurrentGps = $gpsState['available'];
+        $currentLat = $gpsState['latitude'];
+        $currentLng = $gpsState['longitude'];
+        $gpsAgeSeconds = $gpsState['age_seconds'];
+        $gpsSource = $gpsState['source'];
 
-        $hasCurrentGps = $latestTelemetry
-            && $latestTelemetry->latitude !== null
-            && $latestTelemetry->longitude !== null;
+        /*
+         * Prefer the device paired with this driver's own truck. Deriving it
+         * from past telemetry instead would leave the filter empty until the
+         * first reading arrives, and an empty filter accepts whatever the
+         * wildcard topic carries, including another truck's position.
+         */
+        $driverDevice = $driver->assignedTruck?->devices()->orderBy('device_code')->first()
+            ?? $latestTelemetry?->device;
 
-        $currentLat = $hasCurrentGps ? (float) $latestTelemetry->latitude : null;
-        $currentLng = $hasCurrentGps ? (float) $latestTelemetry->longitude : null;
-
-        $expectedDeviceCode = $latestTelemetry?->device?->device_code;
-        $expectedTopic = $latestTelemetry?->device?->mqtt_topic ?? 'coldtrace/trucks/+/telemetry';
+        $expectedDeviceCode = $driverDevice?->device_code;
+        $expectedTopic = $driverDevice?->mqtt_topic ?? 'coldtrace/trucks/+/telemetry';
 
         $googleMapsApiKey = config('services.google_maps.key', env('GOOGLE_MAPS_API_KEY'));
 
@@ -133,6 +147,8 @@ class OrderController extends Controller
             'hasCurrentGps',
             'currentLat',
             'currentLng',
+            'gpsAgeSeconds',
+            'gpsSource',
             'expectedDeviceCode',
             'expectedTopic',
             'googleMapsApiKey',
@@ -142,8 +158,10 @@ class OrderController extends Controller
         ));
     }
 
-    public function show(Order $order)
-    {
+    public function show(
+        Order $order,
+        TemperatureStatusService $temperatureStatusService
+    ) {
         $this->authorizeDriverOrder($order);
 
         $order->load([
@@ -160,28 +178,19 @@ class OrderController extends Controller
         $monitoredProduct = $telemetryTrip?->product
             ?: $order->orderItems->first()?->product;
 
-        $temperatureStatus = 'No Data';
-        $temperatureClass = 'neutral';
+        $temperatureState = $temperatureStatusService->evaluate(
+            $latestTelemetry?->temperature,
+            $monitoredProduct
+        );
+        $temperatureStatus = $temperatureState['label'];
+        $temperatureClass = $temperatureState['class'];
 
-        if ($latestTelemetry && $monitoredProduct) {
-            if ($latestTelemetry->temperature < $monitoredProduct->min_temp) {
-                $temperatureStatus = 'Too Low';
-                $temperatureClass = 'warning';
-            } elseif ($latestTelemetry->temperature > $monitoredProduct->max_temp) {
-                $temperatureStatus = 'Too High';
-                $temperatureClass = 'critical';
-            } else {
-                $temperatureStatus = 'Safe';
-                $temperatureClass = 'safe';
-            }
-        }
-
-        $hasCurrentGps = $latestTelemetry
-            && $latestTelemetry->latitude !== null
-            && $latestTelemetry->longitude !== null;
-
-        $currentLat = $hasCurrentGps ? (float) $latestTelemetry->latitude : null;
-        $currentLng = $hasCurrentGps ? (float) $latestTelemetry->longitude : null;
+        $gpsState = $this->freshGpsState($telemetryTrip);
+        $hasCurrentGps = $gpsState['available'];
+        $currentLat = $gpsState['latitude'];
+        $currentLng = $gpsState['longitude'];
+        $gpsAgeSeconds = $gpsState['age_seconds'];
+        $gpsSource = $gpsState['source'];
 
         $destination = $order->delivery_lat && $order->delivery_lng
             ? $order->delivery_lat.','.$order->delivery_lng
@@ -216,10 +225,92 @@ class OrderController extends Controller
             'hasCurrentGps',
             'currentLat',
             'currentLng',
+            'gpsAgeSeconds',
+            'gpsSource',
             'mapsUrl',
             'currentToDeliveryMapsUrl',
             'googleMapsApiKey'
         ));
+    }
+
+    public function simulateTelemetry(
+        Request $request,
+        SimulatedTemperatureService $temperatureSimulator,
+        TelemetryProcessingService $telemetryProcessor,
+        TemperatureStatusService $temperatureStatusService
+    ): JsonResponse {
+        $this->authorizeDriver();
+
+        $validated = $request->validate([
+            'latitude' => ['nullable', 'required_with:longitude', 'numeric', 'between:-90,90'],
+            'longitude' => ['nullable', 'required_with:latitude', 'numeric', 'between:-180,180'],
+            'accuracy_meters' => ['nullable', 'numeric', 'min:0', 'max:100000'],
+        ]);
+
+        $trip = Trip::query()
+            ->with(['product', 'latestTelemetry', 'truck'])
+            ->where('driver_id', Auth::id())
+            ->whereIn('status', ['pending', 'in_progress'])
+            ->latest('started_at')
+            ->latest('id')
+            ->first();
+
+        if (! $trip || ! $trip->truck) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No active trip and truck are assigned to this driver.',
+            ], 422);
+        }
+
+        $accuracy = isset($validated['accuracy_meters'])
+            ? (float) $validated['accuracy_meters']
+            : null;
+        $locationAccepted = isset($validated['latitude'], $validated['longitude'])
+            && $accuracy !== null
+            && $accuracy > 0
+            && $accuracy <= 200;
+
+        $device = Device::query()->firstOrCreate(
+            ['device_code' => 'SIM-TRUCK-'.$trip->truck_id],
+            [
+                'truck_id' => $trip->truck_id,
+                'mqtt_topic' => 'coldtrace/simulator/trucks/'.$trip->truck_id.'/telemetry',
+                'status' => 'active',
+            ]
+        );
+
+        if ((int) $device->truck_id !== (int) $trip->truck_id) {
+            $device->update(['truck_id' => $trip->truck_id]);
+        }
+
+        $telemetry = $telemetryProcessor->process([
+            'device_code' => $device->device_code,
+            'temperature' => $temperatureSimulator->nextForTrip($trip),
+            'latitude' => $locationAccepted ? (float) $validated['latitude'] : null,
+            'longitude' => $locationAccepted ? (float) $validated['longitude'] : null,
+            'recorded_at' => now()->toIso8601String(),
+        ]);
+        $temperatureState = $temperatureStatusService->evaluate(
+            $telemetry->temperature,
+            $trip->product
+        );
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Software telemetry generated.',
+            'data' => [
+                'source' => 'simulated_temperature',
+                'temperature' => (float) $telemetry->temperature,
+                'temperature_status' => $temperatureState['label'],
+                'latitude' => $telemetry->latitude !== null ? (float) $telemetry->latitude : null,
+                'longitude' => $telemetry->longitude !== null ? (float) $telemetry->longitude : null,
+                'location_accepted' => $locationAccepted,
+                'accuracy_meters' => $accuracy,
+                'mkt_value' => $telemetry->mkt_value !== null ? (float) $telemetry->mkt_value : null,
+                'rsl_hours' => $telemetry->rsl_hours !== null ? (float) $telemetry->rsl_hours : null,
+                'recorded_at' => $telemetry->recorded_at?->toIso8601String(),
+            ],
+        ], 201);
     }
 
     public function aiRouteRecommendation(
@@ -332,6 +423,7 @@ class OrderController extends Controller
             'product',
             'receiver',
             'latestTelemetry.device',
+            'latestGpsTelemetry.device',
         ])
             ->where('driver_id', Auth::id());
 
@@ -371,6 +463,7 @@ class OrderController extends Controller
             'product',
             'receiver',
             'latestTelemetry.device',
+            'latestGpsTelemetry.device',
         ])
             ->where('driver_id', Auth::id())
             ->whereIn('status', ['pending', 'in_progress'])
@@ -379,13 +472,58 @@ class OrderController extends Controller
             ->first();
     }
 
-    public function latestTelemetry(Order $order): JsonResponse
+    /**
+     * Use only a recent, complete device fix for routing. A temperature-only
+     * reading must not erase the last valid position, while an old position
+     * must not be presented as the truck's current location.
+     *
+     * @return array{available: bool, latitude: ?float, longitude: ?float, age_seconds: ?int, source: ?string}
+     */
+    private function freshGpsState(?Trip $trip): array
     {
+        $gpsTelemetry = $trip?->latestGpsTelemetry;
+        $recordedAt = $gpsTelemetry?->recorded_at;
+        $ageSeconds = $recordedAt
+            ? (int) abs(now()->diffInSeconds($recordedAt))
+            : null;
+        $coordinatesAreValid = $gpsTelemetry
+            && $gpsTelemetry->latitude !== null
+            && $gpsTelemetry->longitude !== null
+            && is_finite((float) $gpsTelemetry->latitude)
+            && is_finite((float) $gpsTelemetry->longitude)
+            && (float) $gpsTelemetry->latitude >= -90
+            && (float) $gpsTelemetry->latitude <= 90
+            && (float) $gpsTelemetry->longitude >= -180
+            && (float) $gpsTelemetry->longitude <= 180
+            && ! (
+                (float) $gpsTelemetry->latitude === 0.0
+                && (float) $gpsTelemetry->longitude === 0.0
+            );
+        $available = $coordinatesAreValid
+            && $ageSeconds !== null
+            && $ageSeconds <= self::MAX_GPS_AGE_SECONDS;
+
+        return [
+            'available' => $available,
+            'latitude' => $available ? (float) $gpsTelemetry->latitude : null,
+            'longitude' => $available ? (float) $gpsTelemetry->longitude : null,
+            'age_seconds' => $ageSeconds,
+            'source' => $available && str_starts_with((string) $gpsTelemetry->device?->device_code, 'SIM-')
+                ? 'software'
+                : ($available ? 'esp32' : null),
+        ];
+    }
+
+    public function latestTelemetry(
+        Order $order,
+        TemperatureStatusService $temperatureStatusService
+    ): JsonResponse {
         $this->authorizeDriverOrder($order);
 
         $trip = Trip::query()
             ->with([
                 'latestTelemetry.device',
+                'latestGpsTelemetry.device',
                 'product',
             ])
             ->where('order_id', $order->id)
@@ -410,51 +548,41 @@ class OrderController extends Controller
             ]);
         }
 
-        $temperatureStatus = 'No Data';
-        $temperatureClass = 'neutral';
-
-        if ($latest->temperature !== null && $trip->product) {
-            $temperature = (float) $latest->temperature;
-            $minimum = (float) $trip->product->min_temp;
-            $maximum = (float) $trip->product->max_temp;
-
-            if ($temperature < $minimum) {
-                $temperatureStatus = 'Too Low';
-                $temperatureClass = 'warning';
-            } elseif ($temperature > $maximum) {
-                $temperatureStatus = 'Too High';
-                $temperatureClass = 'critical';
-            } else {
-                $temperatureStatus = 'Safe';
-                $temperatureClass = 'safe';
-            }
-        }
+        $temperatureState = $temperatureStatusService->evaluate(
+            $latest->temperature,
+            $trip->product
+        );
+        $gpsState = $this->freshGpsState($trip);
+        $temperatureSource = str_starts_with(
+            (string) $latest->device?->device_code,
+            'SIM-'
+        ) ? 'simulated' : 'sensor';
 
         return response()->json([
             'success' => true,
             'data' => [
                 'trip_id' => $trip->id,
                 'device_code' => $latest->device?->device_code,
+                'temperature_source' => $temperatureSource,
                 'temperature' => $latest->temperature !== null
                     ? (float) $latest->temperature
                     : null,
                 'humidity' => $latest->humidity !== null
                     ? (float) $latest->humidity
                     : null,
-                'latitude' => $latest->latitude !== null
-                    ? (float) $latest->latitude
-                    : null,
-                'longitude' => $latest->longitude !== null
-                    ? (float) $latest->longitude
-                    : null,
+                'latitude' => $gpsState['latitude'],
+                'longitude' => $gpsState['longitude'],
+                'location_source' => $gpsState['source'],
+                'gps_age_seconds' => $gpsState['age_seconds'],
                 'mkt_value' => $latest->mkt_value !== null
                     ? (float) $latest->mkt_value
                     : null,
                 'rsl_hours' => $latest->rsl_hours !== null
                     ? (float) $latest->rsl_hours
                     : null,
-                'temperature_status' => $temperatureStatus,
-                'temperature_class' => $temperatureClass,
+                'temperature_status' => $temperatureState['label'],
+                'temperature_status_code' => $temperatureState['code'],
+                'temperature_class' => $temperatureState['class'],
                 'recorded_at' => $latest->recorded_at?->toIso8601String(),
             ],
         ]);

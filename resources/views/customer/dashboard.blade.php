@@ -43,23 +43,15 @@
                     @forelse ($currentDeliveries as $trip)
                         @php
                             $reading = $trip->latestTelemetry;
-                            $temperature = $reading?->temperature !== null ? (float) $reading->temperature : null;
-                            $minimum = $trip->product?->min_temp !== null ? (float) $trip->product->min_temp : null;
-                            $maximum = $trip->product?->max_temp !== null ? (float) $trip->product->max_temp : null;
-
-                            if ($temperature === null || $minimum === null || $maximum === null) {
-                                $conditionClass = 'neutral';
-                                $conditionLabel = 'Waiting for cargo update';
-                                $conditionIcon = 'bi-dash-circle';
-                            } elseif ($temperature > $maximum || $temperature < $minimum) {
-                                $conditionClass = 'warning';
-                                $conditionLabel = number_format($temperature, 1) . ' °C · Outside target range';
-                                $conditionIcon = 'bi-exclamation-triangle-fill';
-                            } else {
-                                $conditionClass = 'safe';
-                                $conditionLabel = number_format($temperature, 1) . ' °C · Cargo in range';
-                                $conditionIcon = 'bi-shield-check';
-                            }
+                            $temperatureState = $trip->temperature_state;
+                            $temperature = $temperatureState['temperature'];
+                            $conditionClass = $temperatureState['class'] === 'critical'
+                                ? 'danger'
+                                : $temperatureState['class'];
+                            $conditionLabel = $temperature === null
+                                ? 'Waiting for cargo update'
+                                : number_format($temperature, 1) . ' °C · ' . $temperatureState['label'];
+                            $conditionIcon = $temperatureState['icon'];
                         @endphp
                         <article class="ct-delivery">
                             <div class="ct-delivery-top">
@@ -79,10 +71,10 @@
                                     <a href="{{ route('customer.orders.show', $trip->order) }}" class="ct-button ct-button-light ct-button-small"><i class="bi bi-eye-fill"></i>View order</a>
                                 @endif
                                 @if ($reading?->rsl_hours !== null)
-                                    <span class="ct-button ct-button-small" style="cursor:default;color:#475569;background:#f8fafc;"><i class="bi bi-hourglass-bottom"></i>{{ number_format((float) $reading->rsl_hours, 1) }} hours shelf life</span>
+                                    <span class="ct-button ct-button-small ct-static-chip"><i class="bi bi-hourglass-bottom"></i>{{ number_format((float) $reading->rsl_hours, 1) }} hours shelf life</span>
                                 @endif
                                 @if ($reading?->recorded_at)
-                                    <span class="ct-button ct-button-small" style="cursor:default;color:#64748b;background:#f8fafc;"><i class="bi bi-clock"></i>Updated {{ $reading->recorded_at->diffForHumans() }}</span>
+                                    <span class="ct-button ct-button-small ct-static-chip"><i class="bi bi-clock"></i>Updated {{ $reading->recorded_at->diffForHumans() }}</span>
                                 @endif
                             </div>
                         </article>
@@ -126,5 +118,3 @@
     </div>
 </div>
 @endsection
-
-@include('dashboard.partials.role-dashboard-styles')

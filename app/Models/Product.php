@@ -19,13 +19,29 @@ class Product extends Model
         'activation_energy_j_per_mol',
     ];
 
+    protected function casts(): array
+    {
+        return [
+            'min_temp' => 'float',
+            'max_temp' => 'float',
+            'initial_shelf_life_hours' => 'float',
+            'reference_storage_temp_celsius' => 'float',
+            'activation_energy_j_per_mol' => 'float',
+        ];
+    }
+
     public function trips()
     {
         return $this->hasMany(Trip::class);
     }
 
-        public function orders()
-        {
-            return $this->hasMany(Order::class);
-        }
+    public function orders()
+    {
+        return $this->hasMany(Order::class);
+    }
+
+    public function orderItems()
+    {
+        return $this->hasMany(OrderItem::class);
+    }
 }

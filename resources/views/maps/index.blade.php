@@ -7,43 +7,30 @@
 @php
     $activeTripCount = $trips->where('status', 'in_progress')->count();
     $pendingTripCount = $trips->where('status', 'pending')->count();
-
-    $criticalReadingCount = $trips->filter(function ($trip) {
-        $latest = $trip->latestTelemetry;
-        $product = $trip->product;
-
-        if (!$latest || !$product) {
-            return false;
-        }
-
-        return $latest->temperature < $product->min_temp || $latest->temperature > $product->max_temp;
-    })->count();
-
-    $onlineTruckCount = $trips->filter(function ($trip) {
-        return $trip->latestTelemetry !== null;
-    })->count();
 @endphp
 
-<div class="map-page-header">
+<div class="ct-index monitoring-page">
+<header class="ct-index-header map-page-header">
     <div>
-        <span class="eyebrow">Real-time cold-chain monitoring</span>
+        <small>Real-time cold-chain monitoring</small>
         <h1>Live Trucks</h1>
         <p>
             Track active and pending deliveries, live GPS coordinates, product temperature,
             RSL condition, and route paths in one operations view.
         </p>
+        <p id="fleetConnection" role="status">Checking saved readings every five seconds. Trucks appear when a valid GPS reading arrives.</p>
     </div>
 
-    <div class="map-header-actions">
-        <button type="button" class="secondary-button" onclick="showAllTrips()">
-            Show All Trucks
+    <div class="ct-index-actions map-header-actions">
+        <button type="button" class="ct-button ct-button-light secondary-button" onclick="showAllTrips()">
+            <i class="bi bi-bounding-box-circles"></i>Show all trucks
         </button>
 
-        <a href="{{ route('dashboard') }}" class="primary-button">
-            Admin Dashboard
+        <a href="{{ route('dashboard') }}" class="ct-button ct-button-dark primary-button">
+            <i class="bi bi-grid-1x2-fill"></i>Dashboard
         </a>
     </div>
-</div>
+</header>
 
 @if (empty($googleMapsApiKey))
     <div class="warning-box">
@@ -53,34 +40,34 @@
 
 <div class="map-summary-grid">
     <div class="summary-card">
-        <div class="summary-icon active">GO</div>
+        <div class="summary-icon active"><i class="bi bi-truck-front-fill"></i></div>
         <div>
             <span>Active Trips</span>
-            <strong>{{ $activeTripCount }}</strong>
+            <strong id="activeTripCount">{{ $activeTripCount }}</strong>
         </div>
     </div>
 
     <div class="summary-card">
-        <div class="summary-icon pending">PN</div>
+        <div class="summary-icon pending"><i class="bi bi-clock-fill"></i></div>
         <div>
             <span>Pending Trips</span>
-            <strong>{{ $pendingTripCount }}</strong>
+            <strong id="pendingTripCount">{{ $pendingTripCount }}</strong>
         </div>
     </div>
 
     <div class="summary-card">
-        <div class="summary-icon online">GPS</div>
+        <div class="summary-icon online"><i class="bi bi-geo-alt-fill"></i></div>
         <div>
-            <span>With GPS Data</span>
-            <strong>{{ $onlineTruckCount }}</strong>
+            <span>Live GPS</span>
+            <strong id="onlineTruckCount">0</strong>
         </div>
     </div>
 
     <div class="summary-card danger">
-        <div class="summary-icon critical">°C</div>
+        <div class="summary-icon critical"><i class="bi bi-thermometer-high"></i></div>
         <div>
             <span>Temp Risk</span>
-            <strong>{{ $criticalReadingCount }}</strong>
+            <strong id="criticalReadingCount">0</strong>
         </div>
     </div>
 </div>
@@ -89,99 +76,25 @@
     <aside class="trip-panel">
         <div class="panel-title-row">
             <div>
-                <h2>Active / Pending Trips</h2>
-                <p>Select a delivery to focus the route.</p>
+                <h2>Fleet trucks</h2>
+                <p>Select a truck to view its position and delivery.</p>
             </div>
 
-            <span>{{ $trips->count() }}</span>
+            <span id="fleetTruckCount">{{ $mapTrips->count() }}</span>
         </div>
 
         <div class="search-box">
-            <span>⌕</span>
+            <span><i class="bi bi-search"></i></span>
             <input
                 type="text"
+                id="fleetSearch"
                 placeholder="Search truck, product, driver..."
                 oninput="filterTrips(this.value)"
             >
         </div>
 
         <div class="trip-list" id="tripList">
-            @forelse ($trips as $trip)
-                @php
-                    $latest = $trip->latestTelemetry;
-                    $product = $trip->product;
-
-                    $temperatureStatus = 'No Data';
-                    $temperatureClass = 'neutral';
-
-                    if ($latest && $product) {
-                        if ($latest->temperature < $product->min_temp) {
-                            $temperatureStatus = 'Too Low';
-                            $temperatureClass = 'warning';
-                        } elseif ($latest->temperature > $product->max_temp) {
-                            $temperatureStatus = 'Too High';
-                            $temperatureClass = 'critical';
-                        } else {
-                            $temperatureStatus = 'Safe';
-                            $temperatureClass = 'safe';
-                        }
-                    }
-
-                    $searchText = strtolower(
-                        ($trip->truck?->plate_number ?? '') . ' ' .
-                        ($trip->product?->name ?? '') . ' ' .
-                        ($trip->driver?->name ?? '') . ' ' .
-                        ($trip->receiver?->name ?? '') . ' ' .
-                        ($trip->status ?? '')
-                    );
-                @endphp
-
-                <button
-                    type="button"
-                    class="trip-button"
-                    id="trip-button-{{ $trip->id }}"
-                    data-search="{{ $searchText }}"
-                    onclick="focusTrip({{ $trip->id }})"
-                >
-                    <div class="trip-top">
-                        <div>
-                            <strong>{{ $trip->truck?->plate_number ?? 'No Truck' }}</strong>
-                            <span>{{ $trip->product?->name ?? 'No Product' }}</span>
-                        </div>
-
-                        <em class="status-badge status-{{ $trip->status }}">
-                            {{ ucfirst(str_replace('_', ' ', $trip->status)) }}
-                        </em>
-                    </div>
-
-                    <div class="trip-meta">
-                        <small>Driver: {{ $trip->driver?->name ?? 'No Driver' }}</small>
-                        <small>Receiver: {{ $trip->receiver?->name ?? 'No Receiver' }}</small>
-                    </div>
-
-                    <div class="trip-bottom">
-                        @if ($latest)
-                            <span class="temperature-pill {{ $temperatureClass }}">
-                                {{ $latest->temperature }} °C
-                                <small>{{ $temperatureStatus }}</small>
-                            </span>
-
-                            <span class="rsl-pill">
-                                RSL: {{ $latest->rsl_hours ?? 'N/A' }} hrs
-                            </span>
-                        @else
-                            <span class="temperature-pill neutral">
-                                No GPS Data
-                            </span>
-                        @endif
-                    </div>
-                </button>
-            @empty
-                <div class="empty-box">
-                    <strong>No trips available.</strong>
-                    <span>Active and pending trips will appear here once created.</span>
-                </div>
-            @endforelse
+            <noscript>Enable JavaScript to see live truck locations.</noscript>
         </div>
     </aside>
 
@@ -199,7 +112,17 @@
             </div>
         </div>
 
-        <div id="map"></div>
+        <div class="map-canvas">
+            <div id="map"></div>
+
+            <div class="map-notice" id="mapNotice" hidden>
+                <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                <span id="mapNoticeText"></span>
+                <button type="button" class="map-notice-close" onclick="hideMapNotice()" aria-label="Dismiss">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                </button>
+            </div>
+        </div>
 
         <div class="map-info">
             <div class="map-info-icon">CT</div>
@@ -214,592 +137,34 @@
     </section>
 </div>
 
+</div>
+
 @endsection
 
-@push('styles')
-<style>
-    .map-page-header {
-        display: flex;
-        align-items: flex-end;
-        justify-content: space-between;
-        gap: 24px;
-        margin-bottom: 20px;
-        padding: 24px;
-        border-radius: 24px;
-        background:
-            radial-gradient(circle at top left, rgba(34, 211, 238, 0.18), transparent 35%),
-            linear-gradient(135deg, #ffffff, #f8fafc);
-        border: 1px solid #e5e7eb;
-        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.07);
-    }
-
-    .eyebrow {
-        display: inline-flex;
-        background: #ecfeff;
-        color: #0891b2;
-        border: 1px solid #cffafe;
-        border-radius: 999px;
-        padding: 7px 12px;
-        font-size: 12px;
-        font-weight: 800;
-        margin-bottom: 12px;
-    }
-
-    .map-page-header h1 {
-        margin: 0;
-        color: #0f172a;
-        font-size: 34px;
-        font-weight: 800;
-        letter-spacing: -0.9px;
-    }
-
-    .map-page-header p {
-        margin: 8px 0 0;
-        color: #64748b;
-        max-width: 680px;
-        line-height: 1.6;
-    }
-
-    .map-header-actions {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-        flex-shrink: 0;
-    }
-
-    .warning-box {
-        background: #fffbeb;
-        color: #92400e;
-        border: 1px solid #fde68a;
-        padding: 14px 16px;
-        border-radius: 14px;
-        margin-bottom: 20px;
-        box-shadow: 0 8px 18px rgba(245, 158, 11, 0.08);
-    }
-
-    .map-summary-grid {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 16px;
-        margin-bottom: 20px;
-    }
-
-    .summary-card {
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
-        border-radius: 20px;
-        padding: 18px;
-        display: flex;
-        align-items: center;
-        gap: 14px;
-        box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
-    }
-
-    .summary-icon {
-        width: 44px;
-        height: 44px;
-        border-radius: 15px;
-        color: white;
-        font-size: 12px;
-        font-weight: 800;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex-shrink: 0;
-    }
-
-    .summary-icon.active {
-        background: linear-gradient(135deg, #16a34a, #15803d);
-    }
-
-    .summary-icon.pending {
-        background: linear-gradient(135deg, #f59e0b, #d97706);
-    }
-
-    .summary-icon.online {
-        background: linear-gradient(135deg, #06b6d4, #0891b2);
-    }
-
-    .summary-icon.critical {
-        background: linear-gradient(135deg, #ef4444, #dc2626);
-    }
-
-    .summary-card span {
-        display: block;
-        color: #64748b;
-        font-size: 12px;
-        font-weight: 700;
-        margin-bottom: 5px;
-    }
-
-    .summary-card strong {
-        display: block;
-        color: #0f172a;
-        font-size: 28px;
-        font-weight: 800;
-        line-height: 1;
-    }
-
-    .summary-card.danger strong {
-        color: #dc2626;
-    }
-
-    .map-layout {
-        display: grid;
-        grid-template-columns: 380px minmax(0, 1fr);
-        gap: 20px;
-        align-items: stretch;
-    }
-
-    .trip-panel {
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
-        border-radius: 24px;
-        padding: 18px;
-        height: 720px;
-        overflow: hidden;
-        display: flex;
-        flex-direction: column;
-        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.07);
-    }
-
-    .panel-title-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 12px;
-        margin-bottom: 14px;
-    }
-
-    .panel-title-row h2 {
-        margin: 0;
-        color: #0f172a;
-        font-size: 18px;
-        font-weight: 800;
-    }
-
-    .panel-title-row p {
-        margin: 5px 0 0;
-        color: #64748b;
-        font-size: 13px;
-    }
-
-    .panel-title-row > span {
-        background: #eff6ff;
-        color: #2563eb;
-        border: 1px solid #dbeafe;
-        border-radius: 999px;
-        padding: 6px 10px;
-        font-size: 12px;
-        font-weight: 800;
-    }
-
-    .search-box {
-        position: relative;
-        margin-bottom: 14px;
-    }
-
-    .search-box span {
-        position: absolute;
-        left: 13px;
-        top: 50%;
-        transform: translateY(-50%);
-        color: #94a3b8;
-        font-weight: 800;
-    }
-
-    .search-box input {
-        width: 100%;
-        border: 1px solid #e2e8f0;
-        background: #f8fafc;
-        border-radius: 14px;
-        padding: 12px 14px 12px 36px;
-        outline: none;
-        color: #0f172a;
-        font-size: 13px;
-        transition: 0.2s ease;
-    }
-
-    .search-box input:focus {
-        border-color: #2563eb;
-        background: #ffffff;
-        box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
-    }
-
-    .trip-list {
-        overflow-y: auto;
-        padding-right: 4px;
-    }
-
-    .trip-button {
-        width: 100%;
-        text-align: left;
-        background: #f8fafc;
-        border: 1px solid #e5e7eb;
-        border-radius: 18px;
-        padding: 15px;
-        margin-bottom: 12px;
-        cursor: pointer;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        transition: 0.2s ease;
-    }
-
-    .trip-button:hover {
-        background: #eff6ff;
-        border-color: #93c5fd;
-        transform: translateY(-1px);
-    }
-
-    .trip-button.active-trip {
-        background: #eff6ff;
-        border-color: #2563eb;
-        box-shadow: 0 12px 24px rgba(37, 99, 235, 0.13);
-    }
-
-    .trip-top {
-        display: flex;
-        justify-content: space-between;
-        gap: 12px;
-        align-items: flex-start;
-    }
-
-    .trip-top strong {
-        display: block;
-        color: #0f172a;
-        font-size: 15px;
-        font-weight: 800;
-        margin-bottom: 4px;
-    }
-
-    .trip-top span {
-        display: block;
-        color: #2563eb;
-        font-size: 13px;
-        font-weight: 800;
-    }
-
-    .status-badge {
-        border-radius: 999px;
-        padding: 5px 9px;
-        font-size: 10px;
-        font-style: normal;
-        font-weight: 800;
-        white-space: nowrap;
-    }
-
-    .status-pending {
-        background: #fffbeb;
-        color: #d97706;
-    }
-
-    .status-in_progress {
-        background: #dbeafe;
-        color: #2563eb;
-    }
-
-    .status-completed {
-        background: #f0fdf4;
-        color: #16a34a;
-    }
-
-    .status-cancelled {
-        background: #fef2f2;
-        color: #dc2626;
-    }
-
-    .trip-meta {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-    }
-
-    .trip-meta small {
-        color: #64748b;
-        font-size: 12px;
-    }
-
-    .trip-bottom {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-    }
-
-    .temperature-pill,
-    .rsl-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 7px 10px;
-        border-radius: 999px;
-        font-size: 12px;
-        font-weight: 800;
-    }
-
-    .temperature-pill small {
-        font-size: 10px;
-        opacity: 0.85;
-    }
-
-    .temperature-pill.safe {
-        background: #f0fdf4;
-        color: #16a34a;
-    }
-
-    .temperature-pill.warning {
-        background: #fffbeb;
-        color: #d97706;
-    }
-
-    .temperature-pill.critical {
-        background: #fef2f2;
-        color: #dc2626;
-    }
-
-    .temperature-pill.neutral {
-        background: #f1f5f9;
-        color: #64748b;
-    }
-
-    .rsl-pill {
-        background: #eff6ff;
-        color: #2563eb;
-    }
-
-    .map-card {
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
-        border-radius: 24px;
-        overflow: hidden;
-        position: relative;
-        min-width: 0;
-        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.07);
-    }
-
-    .map-toolbar {
-        position: absolute;
-        z-index: 6;
-        top: 16px;
-        left: 16px;
-        right: 16px;
-        background: rgba(255, 255, 255, 0.94);
-        backdrop-filter: blur(12px);
-        border: 1px solid rgba(226, 232, 240, 0.95);
-        border-radius: 18px;
-        padding: 13px 15px;
-        display: flex;
-        justify-content: space-between;
-        gap: 16px;
-        align-items: center;
-        box-shadow: 0 10px 26px rgba(15, 23, 42, 0.12);
-    }
-
-    .map-toolbar strong {
-        display: block;
-        color: #0f172a;
-        font-size: 14px;
-        font-weight: 800;
-    }
-
-    .map-toolbar span {
-        color: #64748b;
-        font-size: 12px;
-    }
-
-    .legend {
-        display: flex;
-        gap: 12px;
-        flex-wrap: wrap;
-        justify-content: flex-end;
-    }
-
-    .legend span {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        color: #475569;
-        font-size: 12px;
-        font-weight: 700;
-    }
-
-    .legend-dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 999px;
-        display: inline-block;
-    }
-
-    .legend-dot.origin {
-        background: #16a34a;
-    }
-
-    .legend-dot.truck {
-        background: #2563eb;
-    }
-
-    .legend-dot.destination {
-        background: #dc2626;
-    }
-
-    #map {
-        width: 100%;
-        height: 720px;
-    }
-
-    .map-info {
-        position: absolute;
-        left: 20px;
-        bottom: 20px;
-        background: rgba(255, 255, 255, 0.95);
-        border: 1px solid rgba(226, 232, 240, 0.95);
-        backdrop-filter: blur(12px);
-        border-radius: 18px;
-        padding: 15px 16px;
-        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.18);
-        display: grid;
-        grid-template-columns: 42px 1fr;
-        align-items: center;
-        gap: 12px;
-        max-width: 560px;
-        z-index: 5;
-    }
-
-    .map-info-icon {
-        width: 42px;
-        height: 42px;
-        background: linear-gradient(135deg, #2563eb, #06b6d4);
-        color: #ffffff;
-        border-radius: 14px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-weight: 800;
-        font-size: 12px;
-    }
-
-    .map-info strong {
-        display: block;
-        color: #0f172a;
-        font-size: 14px;
-        font-weight: 800;
-        margin-bottom: 4px;
-    }
-
-    .map-info span {
-        display: block;
-        color: #475569;
-        font-size: 13px;
-        line-height: 1.5;
-    }
-
-    .empty-box {
-        padding: 18px;
-        background: #f8fafc;
-        color: #64748b;
-        border-radius: 16px;
-        font-size: 14px;
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        text-align: center;
-    }
-
-    .empty-box strong {
-        color: #0f172a;
-    }
-
-    @media (max-width: 1180px) {
-        .map-summary-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-
-        .map-layout {
-            grid-template-columns: 1fr;
-        }
-
-        .trip-panel {
-            height: auto;
-            max-height: 450px;
-        }
-
-        #map {
-            height: 620px;
-        }
-    }
-
-    @media (max-width: 760px) {
-        .map-page-header {
-            flex-direction: column;
-            align-items: flex-start;
-            padding: 20px;
-        }
-
-        .map-page-header h1 {
-            font-size: 28px;
-        }
-
-        .map-header-actions {
-            width: 100%;
-        }
-
-        .map-header-actions a,
-        .map-header-actions button {
-            width: 100%;
-            text-align: center;
-        }
-
-        .map-summary-grid {
-            grid-template-columns: 1fr;
-        }
-
-        .map-toolbar {
-            flex-direction: column;
-            align-items: flex-start;
-        }
-
-        .legend {
-            justify-content: flex-start;
-        }
-
-        #map {
-            height: 540px;
-        }
-
-        .map-info {
-            left: 12px;
-            right: 12px;
-            bottom: 12px;
-            max-width: none;
-            grid-template-columns: 1fr;
-        }
-
-        .map-info-icon {
-            display: none;
-        }
-    }
-</style>
-@endpush
 
 @push('scripts')
 <script>
-    const trips = @json($mapTrips ?? []);
+    let trips = @json($mapTrips ?? []);
+    const fleetSnapshotUrl = @json(route('monitoring.latest'));
+    const liveTelemetryByTruck = new Map();
+    const truckMarkers = new Map();
+    let fleetMqttClient = null;
+    let fleetHasPosition = false;
+    let pollingFleet = false;
 
     let map;
     let RouteClass;
     let AdvancedMarkerElementClass;
     let markers = [];
     let routePolylines = [];
+    let routeRequestVersion = 0;
     let selectedTripId = null;
 
-    async function initColdTraceMap() {
-        const [{ Map }, { Route }, { AdvancedMarkerElement }] = await Promise.all([
+    async function initializeFleetMap() {
+        const [{ Map }, { AdvancedMarkerElement }] = await Promise.all([
             google.maps.importLibrary("maps"),
-            google.maps.importLibrary("routes"),
             google.maps.importLibrary("marker"),
         ]);
-
-        RouteClass = Route;
         AdvancedMarkerElementClass = AdvancedMarkerElement;
 
      map = new Map(document.getElementById("map"), {
@@ -824,13 +189,13 @@
 
         showAllTrips();
 
-        if (trips.length > 0) {
-            focusTrip(trips[0].id);
-        }
+
     }
 
     function showAllTrips() {
         selectedTripId = null;
+        if (!map) return;
+        hideMapNotice();
         clearMarkers();
         clearRoutePolylines();
         clearActiveTripButtons();
@@ -847,7 +212,8 @@
 
             const marker = createAdvancedMarker({
                 position: position,
-                label: "TRK",
+                truckNumber: trip.truck?.id,
+                type: "truck",
                 title: trip.truck?.plate_number ?? "ColdTrace Truck",
                 infoContent: buildTruckInfoWindow(trip),
                 background: "#2563eb",
@@ -857,11 +223,12 @@
                 focusTrip(trip.id);
             });
 
-            markers.push(marker);
+            truckMarkers.set(trip.id, marker);
             bounds.extend(position);
             hasPosition = true;
         });
 
+        fleetHasPosition = hasPosition;
         if (hasPosition) {
             map.fitBounds(bounds);
         } else {
@@ -871,7 +238,7 @@
 
         document.getElementById("selectedTripTitle").innerText = "All trucks";
         document.getElementById("selectedTripDetails").innerText =
-            "Showing all trucks with available GPS or origin coordinates.";
+            "Showing trucks with a GPS reading from the last two minutes.";
     }
 
     function focusTrip(tripId) {
@@ -879,10 +246,11 @@
             return Number(item.id) === Number(tripId);
         });
 
-        if (!trip) {
+        if (!trip || !map) {
             return;
         }
 
+        hideMapNotice();
         selectedTripId = tripId;
         clearMarkers();
         clearRoutePolylines();
@@ -919,9 +287,10 @@
         }
 
         if (truckPosition) {
-            markers.push(createAdvancedMarker({
+            truckMarkers.set(trip.id, createAdvancedMarker({
                 position: truckPosition,
-                label: "TRK",
+                truckNumber: trip.truck?.id,
+                type: "truck",
                 title: trip.truck?.plate_number ?? "ColdTrace Truck",
                 infoContent: buildTruckInfoWindow(trip),
                 background: "#2563eb",
@@ -939,11 +308,80 @@
             return;
         }
 
-        alert("This trip has no valid coordinates yet.");
+        showMapNotice("This trip has no valid coordinates yet. A position appears once its device reports a good GPS fix.");
+    }
+
+    function showMapNotice(message) {
+        const notice = document.getElementById("mapNotice");
+
+        document.getElementById("mapNoticeText").textContent = message;
+        notice.hidden = false;
+    }
+
+    function hideMapNotice() {
+        document.getElementById("mapNotice").hidden = true;
+    }
+
+    /*
+     * Turn a Routes API failure into something an administrator can act on.
+     * The most common cause by far is the Routes API not being enabled on the
+     * Google Cloud project, which reads as PERMISSION_DENIED.
+     */
+    function describeRouteFailure(error) {
+        const detail = String(error?.message ?? error ?? "");
+
+        if (detail.includes("PERMISSION_DENIED") || detail.includes("has not been used in project")) {
+            return "Driving routes are unavailable: the Routes API is not enabled for this Google Cloud project. Enable it in the Google Cloud console, then reload. Showing a direct line instead.";
+        }
+
+        if (detail.includes("REQUEST_DENIED") || detail.includes("ApiNotActivatedMapError")) {
+            return "Driving routes are unavailable: this API key is not authorised for the Routes API. Showing a direct line instead.";
+        }
+
+        if (detail.includes("OVER_QUERY_LIMIT") || detail.includes("RESOURCE_EXHAUSTED")) {
+            return "The Google Routes quota for this project is used up, so driving routes are paused. Showing a direct line instead.";
+        }
+
+        return "Driving routes are unavailable right now. Showing a direct line between pickup and destination instead.";
+    }
+
+    /*
+     * A straight line is not the road the truck takes, but it still shows where
+     * the delivery starts and ends. Losing the whole map because one Google API
+     * is switched off would be worse, so the route degrades rather than fails.
+     */
+    function drawDirectLine(origin, destination, message) {
+        clearRoutePolylines();
+
+        const directLine = new google.maps.Polyline({
+            path: [origin, destination],
+            strokeColor: "#64748b",
+            strokeOpacity: 0,
+            strokeWeight: 3,
+            icons: [{
+                icon: {
+                    path: "M 0,-1 0,1",
+                    strokeOpacity: 0.85,
+                    strokeWeight: 3,
+                    scale: 3,
+                },
+                offset: "0",
+                repeat: "14px",
+            }],
+        });
+
+        directLine.setMap(map);
+        routePolylines = [directLine];
+
+        fitMapToPath([origin, destination]);
+        showMapNotice(message);
     }
 
     async function drawRoute(origin, destination) {
+        const routeTruckId = selectedTripId;
         clearRoutePolylines();
+        const requestVersion = routeRequestVersion;
+        hideMapNotice();
 
         try {
             const request = {
@@ -953,10 +391,16 @@
                 fields: ["path"],
             };
 
+            RouteClass ??= (await google.maps.importLibrary("routes")).Route;
             const { routes } = await RouteClass.computeRoutes(request);
+            if (selectedTripId !== routeTruckId || requestVersion !== routeRequestVersion) return;
 
             if (!routes || routes.length === 0) {
-                alert("No route found for this trip.");
+                drawDirectLine(
+                    origin,
+                    destination,
+                    "Google could not find a driving route between these points. Showing a direct line instead."
+                );
                 return;
             }
 
@@ -978,42 +422,48 @@
                 fitMapToPath(selectedRoute.path);
             }
         } catch (error) {
+            if (selectedTripId !== routeTruckId || requestVersion !== routeRequestVersion) return;
             console.error("Routes API request failed:", error);
 
-            alert(
-                "Unable to load route. Make sure Maps JavaScript API and Routes API are enabled for your Google Cloud project."
-            );
+            drawDirectLine(origin, destination, describeRouteFailure(error));
         }
     }
 
-    async function fitMapToPath(path) {
-        const { LatLngBounds } = await google.maps.importLibrary("core");
-        const bounds = new LatLngBounds();
+    function fitMapToPath(path) {
+        const bounds = new google.maps.LatLngBounds();
 
         path.forEach(function (point) {
             bounds.extend(point);
         });
+        const selected = trips.find(trip => trip.id === selectedTripId);
+        const position = selected && getBestTruckPosition(selected);
+        if (position) bounds.extend(position);
 
         map.fitBounds(bounds);
     }
 
     function createAdvancedMarker(options) {
-        const markerContent = document.createElement("div");
+        const markerContent = options.type === "truck"
+            ? window.createColdTraceTruckMarker(options.truckNumber)
+            : document.createElement("div");
 
-        markerContent.style.background = options.background ?? "#2563eb";
-        markerContent.style.color = "white";
-        markerContent.style.padding = "8px 10px";
-        markerContent.style.borderRadius = "999px";
-        markerContent.style.fontSize = "11px";
-        markerContent.style.fontWeight = "800";
-        markerContent.style.boxShadow = "0 8px 18px rgba(15, 23, 42, 0.28)";
-        markerContent.style.border = "2px solid white";
-        markerContent.innerText = options.label ?? "CT";
+        if (options.type !== "truck") {
+            markerContent.style.background = options.background ?? "#2563eb";
+            markerContent.style.color = "white";
+            markerContent.style.padding = "8px 10px";
+            markerContent.style.borderRadius = "999px";
+            markerContent.style.fontSize = "11px";
+            markerContent.style.fontWeight = "800";
+            markerContent.style.boxShadow = "0 8px 18px rgba(15, 23, 42, 0.28)";
+            markerContent.style.border = "2px solid white";
+            markerContent.innerText = options.label ?? "CT";
+        }
 
         const marker = new AdvancedMarkerElementClass({
             map: map,
             position: options.position,
             content: markerContent,
+            zIndex: options.type === "truck" ? 10 : 1,
             title: options.title ?? "ColdTrace Marker",
         });
 
@@ -1021,6 +471,7 @@
             content: options.infoContent ?? "",
         });
 
+        marker.fleetInfoWindow = infoWindow;
         marker.addListener("click", function () {
             infoWindow.open({
                 anchor: marker,
@@ -1047,32 +498,21 @@
     }
 
     function getLatLng(location) {
-        if (!location || location.lat === null || location.lng === null) {
-            return null;
-        }
-
-        return {
-            lat: Number(location.lat),
-            lng: Number(location.lng),
-        };
+        if (!location || location.lat == null || location.lng == null) return null;
+        const lat = Number(location.lat), lng = Number(location.lng);
+        return Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90
+            && Math.abs(lng) <= 180 && !(lat === 0 && lng === 0) ? {lat, lng} : null;
     }
 
     function getBestTruckPosition(trip) {
-        if (
-            trip.latestTelemetry &&
-            trip.latestTelemetry.lat !== null &&
-            trip.latestTelemetry.lng !== null
-        ) {
-            return {
-                lat: Number(trip.latestTelemetry.lat),
-                lng: Number(trip.latestTelemetry.lng),
-            };
-        }
-
-        return getLatLng(trip.origin);
+        const time = Date.parse(trip.gps?.recorded_at);
+        if (!Number.isFinite(time) || Date.now() - time > 120000 || time - Date.now() > 30000) return null;
+        return getLatLng(trip.gps);
     }
 
     function clearMarkers() {
+        truckMarkers.forEach(marker => { marker.map = null; });
+        truckMarkers.clear();
         markers.forEach(function (marker) {
             marker.map = null;
         });
@@ -1081,6 +521,7 @@
     }
 
     function clearRoutePolylines() {
+        routeRequestVersion++;
         routePolylines.forEach(function (polyline) {
             polyline.setMap(null);
         });
@@ -1123,7 +564,8 @@
                 Receiver: ${escapeHtml(trip.receiver?.name ?? "N/A")}<br>
                 Temperature: ${escapeHtml(String(trip.latestTelemetry?.temperature ?? "No reading"))} °C<br>
                 RSL: ${escapeHtml(String(trip.latestTelemetry?.rsl_hours ?? "N/A"))} hours<br>
-                Last Update: ${escapeHtml(trip.latestTelemetry?.recorded_at ?? "N/A")}
+                GPS Update: ${escapeHtml(trip.gps?.recorded_at ?? "Waiting for GPS")}<br>
+                Temperature Update: ${escapeHtml(trip.latestTelemetry?.recorded_at ?? "N/A")}
             </div>
         `;
     }
@@ -1137,11 +579,14 @@
             .replaceAll("'", "&#039;");
     }
 
-    window.initColdTraceMap = initColdTraceMap;
+    window.initColdTraceMap = async function () {
+        try { await initializeFleetMap(); }
+        catch (error) { showMapNotice("The map could not load. Check your connection and reload the page."); }
+    };
 </script>
 
-<script
-    async
-    src="https://maps.googleapis.com/maps/api/js?key={{ $googleMapsApiKey }}&loading=async&callback=initColdTraceMap">
-</script>
+@if (!empty($googleMapsApiKey))
+<script async src="https://maps.googleapis.com/maps/api/js?key={{ $googleMapsApiKey }}&loading=async&callback=initColdTraceMap"></script>
+@endif
+@include('maps.live-feed')
 @endpush

@@ -9,13 +9,15 @@ use App\Models\TelemetryLog;
 use App\Models\Trip;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
 
 final class TelemetryProcessingService
 {
     public function __construct(
         private readonly MktCalculatorService $mktCalculator,
-        private readonly RemainingShelfLifeService $rslCalculator
+        private readonly RemainingShelfLifeService $rslCalculator,
+        private readonly TemperatureAlertService $temperatureAlerts
     ) {}
 
     /**
@@ -104,6 +106,22 @@ final class TelemetryProcessingService
                 latestTelemetryLog: $telemetryLog
             );
 
+            /*
+             * Alert state follows the chronologically latest trip reading.
+             * A delayed historical upload must not overwrite the current
+             * temperature condition.
+             */
+            $currentTelemetryLog = TelemetryLog::query()
+                ->where('trip_id', $trip->id)
+                ->latest('recorded_at')
+                ->latest('id')
+                ->firstOrFail();
+
+            $this->temperatureAlerts->synchronize(
+                trip: $trip,
+                telemetryLog: $currentTelemetryLog
+            );
+
             return $telemetryLog->fresh([
                 'trip.product',
                 'device',
@@ -119,6 +137,8 @@ final class TelemetryProcessingService
             return;
         }
 
+        $trip->loadMissing('product');
+
         $temperatureLogs = TelemetryLog::query()
             ->where('trip_id', $trip->id)
             ->whereNotNull('temperature')
@@ -128,15 +148,18 @@ final class TelemetryProcessingService
                 'recorded_at',
             ]);
 
+        $productActivationEnergy = $this->productActivationEnergy(
+            $trip
+        );
+
         $mkt = $this->mktCalculator->calculateFromTelemetry(
-            $temperatureLogs
+            telemetryLogs: $temperatureLogs,
+            activationEnergyJPerMol: $productActivationEnergy
         );
 
         if ($mkt === null) {
             return;
         }
-
-        $trip->loadMissing('product');
 
         if (! $trip->product) {
             $latestTelemetryLog->update([
@@ -146,21 +169,75 @@ final class TelemetryProcessingService
             return;
         }
 
+        $latestTelemetryLog->update([
+            'mkt_value' => $mkt,
+            'rsl_hours' => null,
+        ]);
+
+        $profileIssues = $this->rslCalculator
+            ->productProfileIssues($trip->product);
+
+        if ($profileIssues !== []) {
+            Log::warning(
+                'ColdTrace skipped the remaining shelf-life estimate because the product scientific profile is incomplete.',
+                [
+                    'trip_id' => $trip->id,
+                    'product_id' => $trip->product->id,
+                    'issues' => $profileIssues,
+                ]
+            );
+
+            return;
+        }
+
         $elapsedHours = $this->calculateElapsedHours(
             $trip,
             $latestTelemetryLog
         );
 
-        $rsl = $this->rslCalculator->calculateForProduct(
-            product: $trip->product,
-            elapsedHours: $elapsedHours,
-            mktCelsius: $mkt
-        );
+        try {
+            $rsl = $this->rslCalculator->calculateForProduct(
+                product: $trip->product,
+                elapsedHours: $elapsedHours,
+                mktCelsius: $mkt
+            );
+        } catch (InvalidArgumentException $exception) {
+            Log::warning(
+                'ColdTrace could not calculate the remaining shelf-life estimate.',
+                [
+                    'trip_id' => $trip->id,
+                    'product_id' => $trip->product->id,
+                    'message' => $exception->getMessage(),
+                ]
+            );
+
+            return;
+        }
 
         $latestTelemetryLog->update([
             'mkt_value' => $mkt,
             'rsl_hours' => $rsl['remaining_hours'],
         ]);
+    }
+
+    private function productActivationEnergy(Trip $trip): ?float
+    {
+        $activationEnergy = $trip->product
+            ? data_get(
+                $trip->product,
+                'activation_energy_j_per_mol'
+            )
+            : null;
+
+        if (
+            ! is_numeric($activationEnergy)
+            || ! is_finite((float) $activationEnergy)
+            || (float) $activationEnergy <= 0
+        ) {
+            return null;
+        }
+
+        return (float) $activationEnergy;
     }
 
     private function findActiveTrip(Device $device): ?Trip

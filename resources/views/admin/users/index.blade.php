@@ -5,7 +5,7 @@
 @section('content')
 @php
     $driverRole = $roles->firstWhere('name', 'Driver');
-    $receiverRole = $roles->firstWhere('name', 'Receiver');
+    $administratorRole = $roles->firstWhere('name', 'Administrator');
 @endphp
 
 <div class="ct-index">
@@ -13,7 +13,7 @@
         <div>
             <small>Administrator workspace</small>
             <h1>User management</h1>
-            <p>Find accounts, review access, and maintain the three supported system roles from one place.</p>
+            <p>Manage administrator and driver access from one place.</p>
         </div>
         <div class="ct-index-actions">
             <a href="{{ route('users.create') }}" class="ct-button ct-button-dark"><i class="bi bi-person-plus-fill"></i>Add user</a>
@@ -31,7 +31,7 @@
         <x-dashboard.metric label="All accounts" :value="$stats['total']" icon="bi-people-fill" tone="blue" :href="route('users.index')" />
         <x-dashboard.metric label="Active" :value="$stats['active']" icon="bi-person-check-fill" tone="green" :href="route('users.index', ['status' => 'active'])" />
         <x-dashboard.metric label="Drivers" :value="$stats['drivers']" icon="bi-truck-front-fill" tone="cyan" :href="$driverRole ? route('users.index', ['role_id' => $driverRole->id]) : null" />
-        <x-dashboard.metric label="Customers" :value="$stats['receivers']" icon="bi-box2-heart-fill" tone="violet" :href="$receiverRole ? route('users.index', ['role_id' => $receiverRole->id]) : null" />
+        <x-dashboard.metric label="Administrators" :value="$stats['administrators']" icon="bi-shield-lock-fill" tone="violet" :href="$administratorRole ? route('users.index', ['role_id' => $administratorRole->id]) : null" />
     </section>
 
     <section class="ct-panel">
@@ -65,22 +65,22 @@
 
         <div class="ct-panel-body ct-panel-body-flush">
             <div class="ct-table-wrap">
-                <table class="ct-table">
+                <table class="ct-table ct-card-table">
                     <thead><tr><th>User</th><th>Role</th><th>Contact</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
                     <tbody>
                         @forelse ($users as $user)
                             <tr>
-                                <td><strong>{{ $user->name }}</strong><small>{{ $user->email }}</small></td>
-                                <td><x-dashboard.role-badge :role="$user->role?->name" /></td>
-                                <td><strong>{{ $user->phone ?? 'No phone' }}</strong></td>
-                                <td><x-dashboard.status-badge :status="$user->status" /></td>
-                                <td><strong>{{ $user->created_at?->format('M d, Y') }}</strong><small>{{ $user->created_at?->format('h:i A') }}</small></td>
-                                <td>
+                                <td data-label="User"><strong>{{ $user->name }}</strong><small>{{ $user->email }}</small></td>
+                                <td data-label="Role"><x-dashboard.role-badge :role="$user->role?->name" /></td>
+                                <td data-label="Contact"><strong>{{ $user->phone ?? 'No phone' }}</strong></td>
+                                <td data-label="Status"><x-dashboard.status-badge :status="$user->status" /></td>
+                                <td data-label="Created"><strong>{{ $user->created_at?->format('M d, Y') }}</strong><small>{{ $user->created_at?->format('h:i A') }}</small></td>
+                                <td data-label="Actions">
                                     <div class="ct-inline-actions">
                                         <a href="{{ route('users.show', $user) }}" class="ct-icon-button" title="View user"><i class="bi bi-eye-fill"></i></a>
                                         <a href="{{ route('users.edit', $user) }}" class="ct-icon-button" title="Edit user"><i class="bi bi-pencil-fill"></i></a>
                                         @if (auth()->id() !== $user->id)
-                                            <form method="POST" action="{{ route('users.destroy', $user) }}" onsubmit="return confirm('Delete this user account? This action cannot be undone.');">
+                                            <form method="POST" action="{{ route('users.destroy', $user) }}" data-confirm="Delete this account? This cannot be undone. To suspend someone instead, set their status to inactive." data-confirm-action="Delete account">
                                                 @csrf @method('DELETE')
                                                 <button type="submit" class="ct-icon-button danger" title="Delete user"><i class="bi bi-trash3-fill"></i></button>
                                             </form>
@@ -101,6 +101,3 @@
     </section>
 </div>
 @endsection
-
-@include('dashboard.partials.role-dashboard-styles')
-@include('dashboard.partials.role-index-styles')

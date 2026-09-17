@@ -21,11 +21,53 @@
         </div>
     </section>
 
+    @php
+        $remainingSetup = collect($setupSteps)->reject(fn ($step) => $step['done']);
+    @endphp
+
+    @if ($remainingSetup->isNotEmpty())
+        <section class="ct-panel ct-setup" aria-labelledby="setupHeading">
+            <header class="ct-panel-header">
+                <div class="ct-panel-heading">
+                    <span class="ct-panel-icon amber"><i class="bi bi-clipboard-check-fill"></i></span>
+                    <div class="ct-panel-title">
+                        <small>{{ count($setupSteps) - $remainingSetup->count() }} of {{ count($setupSteps) }} done</small>
+                        <h2 id="setupHeading">Finish setting up ColdTrace</h2>
+                    </div>
+                </div>
+                <span class="ct-result-count">Orders cannot be dispatched until these are complete.</span>
+            </header>
+
+            <div class="ct-setup-steps">
+                @foreach ($setupSteps as $step)
+                    <div class="ct-setup-step {{ $step['done'] ? 'done' : 'todo' }}">
+                        <span class="ct-setup-mark">
+                            @if ($step['done'])
+                                <i class="bi bi-check-lg"></i>
+                            @else
+                                {{ $loop->iteration }}
+                            @endif
+                        </span>
+                        <div class="ct-setup-copy">
+                            <strong>{{ $step['label'] }}</strong>
+                            <span>{{ $step['detail'] }}</span>
+                        </div>
+                        @if (! $step['done'] && $step['url'])
+                            <a href="{{ $step['url'] }}" class="ct-button ct-button-dark ct-button-small">
+                                {{ $step['action'] }}
+                            </a>
+                        @endif
+                    </div>
+                @endforeach
+            </div>
+        </section>
+    @endif
+
     <section class="ct-metrics" aria-label="Operational summary">
         <x-dashboard.metric label="Awaiting assignment" :value="$pendingOrders" detail="Orders without an active dispatch" icon="bi-hourglass-split" tone="amber" :href="route('orders.index', ['status' => 'pending'])" />
         <x-dashboard.metric label="In transit" :value="$inTransitOrders" detail="Deliveries currently moving" icon="bi-truck-front-fill" tone="cyan" :href="route('orders.index', ['status' => 'in_transit'])" />
         <x-dashboard.metric label="Devices reporting" :value="$reportingDevices" :detail="$assignedDevices . ' assigned devices'" icon="bi-router-fill" tone="green" :href="route('monitoring.index')" />
-        <x-dashboard.metric label="Open exceptions" :value="$unresolvedAlerts" :detail="$criticalAlerts . ' critical'" icon="bi-exclamation-triangle-fill" :tone="$criticalAlerts > 0 ? 'red' : 'violet'" :href="route('reports.index')" />
+        <x-dashboard.metric label="Open exceptions" :value="$unresolvedAlerts" :detail="$criticalAlerts . ' critical'" icon="bi-exclamation-triangle-fill" :tone="$criticalAlerts > 0 ? 'red' : 'violet'" :href="route('monitoring.index')" />
     </section>
 
     <div class="ct-grid-main">
@@ -42,27 +84,15 @@
                     @forelse ($activeDeliveryTrips as $trip)
                         @php
                             $reading = $trip->latestTelemetry;
-                            $temperature = $reading?->temperature !== null ? (float) $reading->temperature : null;
-                            $minimum = $trip->product?->min_temp !== null ? (float) $trip->product->min_temp : null;
-                            $maximum = $trip->product?->max_temp !== null ? (float) $trip->product->max_temp : null;
-
-                            if ($temperature === null || $minimum === null || $maximum === null) {
-                                $conditionClass = 'neutral';
-                                $conditionLabel = 'Waiting for sensor data';
-                                $conditionIcon = 'bi-dash-circle';
-                            } elseif ($temperature > $maximum) {
-                                $conditionClass = 'danger';
-                                $conditionLabel = number_format($temperature, 1) . ' °C · Above range';
-                                $conditionIcon = 'bi-thermometer-high';
-                            } elseif ($temperature < $minimum) {
-                                $conditionClass = 'warning';
-                                $conditionLabel = number_format($temperature, 1) . ' °C · Below range';
-                                $conditionIcon = 'bi-thermometer-low';
-                            } else {
-                                $conditionClass = 'safe';
-                                $conditionLabel = number_format($temperature, 1) . ' °C · In range';
-                                $conditionIcon = 'bi-shield-check';
-                            }
+                            $temperatureState = $trip->temperature_state;
+                            $temperature = $temperatureState['temperature'];
+                            $conditionClass = $temperatureState['class'] === 'critical'
+                                ? 'danger'
+                                : $temperatureState['class'];
+                            $conditionLabel = $temperature === null
+                                ? 'Waiting for sensor data'
+                                : number_format($temperature, 1) . ' °C · ' . $temperatureState['label'];
+                            $conditionIcon = $temperatureState['icon'];
                         @endphp
                         <article class="ct-delivery">
                             <div class="ct-delivery-top">
@@ -82,7 +112,7 @@
                                     <a href="{{ route('orders.show', $trip->order) }}" class="ct-button ct-button-light ct-button-small"><i class="bi bi-eye-fill"></i>Open order</a>
                                 @endif
                                 @if ($trip->latestTelemetry?->recorded_at)
-                                    <span class="ct-button ct-button-small" style="cursor:default;color:#64748b;background:#f8fafc;"><i class="bi bi-clock"></i>{{ $trip->latestTelemetry->recorded_at->diffForHumans() }}</span>
+                                    <span class="ct-button ct-button-small ct-static-chip"><i class="bi bi-clock"></i>{{ $trip->latestTelemetry->recorded_at->diffForHumans() }}</span>
                                 @endif
                             </div>
                         </article>
@@ -109,7 +139,7 @@
                         <a href="{{ route('monitoring.index') }}" class="ct-attention-item {{ $devicesNeedingAttention > 0 ? 'danger' : '' }}">
                             <i class="bi bi-router-fill"></i><span class="ct-attention-copy"><strong>Check fleet connectivity</strong><span>Assigned devices without a reading in 15 minutes.</span></span><span class="ct-attention-count">{{ $devicesNeedingAttention }}</span>
                         </a>
-                        <a href="{{ route('reports.index') }}" class="ct-attention-item {{ $criticalAlerts > 0 ? 'danger' : '' }}">
+                        <a href="{{ route('monitoring.index') }}" class="ct-attention-item {{ $criticalAlerts > 0 ? 'danger' : '' }}">
                             <i class="bi bi-thermometer-high"></i><span class="ct-attention-copy"><strong>Review critical exceptions</strong><span>Unresolved cold-chain events marked critical.</span></span><span class="ct-attention-count">{{ $criticalAlerts }}</span>
                         </a>
                     </div>
@@ -169,5 +199,3 @@
     </section>
 </div>
 @endsection
-
-@include('dashboard.partials.role-dashboard-styles')

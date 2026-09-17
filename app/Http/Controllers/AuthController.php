@@ -34,16 +34,14 @@ class AuthController extends Controller
                 return redirect()->intended(route('driver.dashboard'));
             }
 
-            if ($user->isReceiver()) {
-                return redirect()->intended(route('customer.dashboard'));
-            }
-
             Auth::logout();
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
 
             return redirect()
                 ->route('login')
                 ->withErrors([
-                    'email' => 'Your account role is not configured correctly.',
+                    'email' => 'ColdTrace access is limited to administrator and driver accounts.',
                 ]);
         }
 

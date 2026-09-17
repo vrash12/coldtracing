@@ -17,17 +17,10 @@ export default defineConfig({
         tailwindcss(),
     ],
     server: {
-        host: process.env.DOCKER_ENV === 'true' ? '0.0.0.0' : 'localhost',
+        host: 'localhost',
         port: 5173,
         strictPort: true,
-        hmr: process.env.DOCKER_ENV === 'true'
-            ? {
-                host: process.env.VITE_HMR_HOST || 'localhost',
-                port: 5173,
-            }
-            : undefined,
         watch: {
-            usePolling: process.env.DOCKER_ENV === 'true',
             ignored: ['**/storage/framework/views/**'],
         },
     },

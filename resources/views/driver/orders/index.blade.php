@@ -13,27 +13,27 @@
 
     $currentGpsText = ($hasCurrentGps ?? false)
         ? number_format((float) $currentLat, 7) . ', ' . number_format((float) $currentLng, 7)
-        : 'No ESP32 GPS reading yet';
+        : 'No live location yet';
 @endphp
 
-<div class="driver-orders-page">
+<div class="ct-index driver-orders-page">
 
-    <div class="driver-orders-header">
+    <header class="ct-index-header driver-orders-header">
         <div>
-            <span class="eyebrow">Driver Orders</span>
-            <h1>My Assigned Orders</h1>
+            <small>Driver workspace</small>
+            <h1>Orders & route planner</h1>
             <p>
                 Build one efficient route from your truck's current GPS to every active delivery.
             </p>
         </div>
 
-        <div class="header-actions">
-            <button type="button" class="primary-button" onclick="optimizeDriverOrdersRoute(true)">
+        <div class="ct-index-actions header-actions">
+            <button type="button" class="ct-button ct-button-dark primary-button" onclick="optimizeDriverOrdersRoute(true)">
                 <i class="bi bi-signpost-split"></i>
                 Optimize Route
             </button>
         </div>
-    </div>
+    </header>
 
     @if (session('success'))
         <div class="flash-message success">
@@ -67,7 +67,10 @@
                 <span>Current Truck GPS</span>
                 <strong id="currentGpsText">{{ $currentGpsText }}</strong>
                 <small id="currentGpsHelp">
-                    {{ ($hasCurrentGps ?? false) ? 'Using latest ESP32 telemetry.' : 'Use ESP32 telemetry or browser GPS before optimizing.' }}
+                    {{ ($hasCurrentGps ?? false)
+                        ? (($gpsSource ?? 'esp32') === 'software' ? 'Live device/API fix' : 'Verified ESP32 fix')
+                            . (isset($gpsAgeSeconds) ? ' · ' . $gpsAgeSeconds . 's ago' : '')
+                        : 'Start the API feed for live device location.' }}
                 </small>
             </div>
 
@@ -109,9 +112,9 @@
                 Optimize All Orders
             </button>
 
-            <button type="button" class="secondary-button" onclick="useBrowserLocationForRoute()">
+            <button type="button" class="secondary-button software-telemetry-toggle" onclick="useBrowserLocationForRoute()">
                 <i class="bi bi-crosshair"></i>
-                Use My Phone GPS
+                <span data-start-label="Start Live API Feed" data-stop-label="Stop Live API Feed">Start Live API Feed</span>
             </button>
 
             <button type="button" class="secondary-button" onclick="fitDriverRouteMap()">
@@ -326,7 +329,7 @@
 
                             <td data-label="Action">
                                 <a href="{{ route('driver.orders.show', $order) }}" class="primary-button small-button">
-                                    View Details
+                                    <i class="bi bi-arrow-right-circle-fill"></i>Open delivery
                                 </a>
                             </td>
                         </tr>
@@ -356,956 +359,32 @@
             Optimize
         </button>
 
+        <button type="button" class="software-telemetry-toggle" onclick="useBrowserLocationForRoute()">
+            <i class="bi bi-crosshair"></i>
+            <span data-start-label="Live Feed" data-stop-label="Stop Feed">Live Feed</span>
+        </button>
+
         <a href="#" target="_blank" rel="noopener" id="mobileOpenMapsButton" class="disabled-link">
             <i class="bi bi-map"></i>
             Maps
-        </a>    </nav>
+        </a>
+    </nav>
 </div>
 
 @endsection
 
-@push('styles')
-<style>
-    *,
-    *::before,
-    *::after {
-        box-sizing: border-box;
-    }
-
-    .driver-orders-page {
-        --ct-blue: #2563eb;
-        --ct-cyan: #06b6d4;
-        --ct-green: #16a34a;
-        --ct-amber: #f59e0b;
-        --ct-red: #dc2626;
-        --ct-slate-50: #f8fafc;
-        --ct-slate-100: #f1f5f9;
-        --ct-slate-200: #e2e8f0;
-        --ct-slate-300: #cbd5e1;
-        --ct-slate-500: #64748b;
-        --ct-slate-600: #475569;
-        --ct-slate-900: #0f172a;
-        display: flex;
-        flex-direction: column;
-        gap: 20px;
-        width: 100%;
-        max-width: 100%;
-        color: var(--ct-slate-900);
-    }
-
-    .driver-orders-page button,
-    .driver-orders-page a,
-    .driver-orders-page input,
-    .driver-orders-page select {
-        -webkit-tap-highlight-color: transparent;
-    }
-
-    .driver-orders-header,
-    .route-planner-panel,
-    .missing-location-panel,
-    .driver-orders-panel {
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
-        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.07);
-    }
-
-    .driver-orders-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-end;
-        gap: 24px;
-        padding: 24px;
-        border-radius: 24px;
-        background:
-            radial-gradient(circle at top left, rgba(34, 211, 238, 0.18), transparent 35%),
-            linear-gradient(135deg, #ffffff, #f8fafc);
-    }
-
-    .eyebrow,
-    .section-kicker {
-        display: inline-flex;
-        width: fit-content;
-        border-radius: 999px;
-        font-size: 12px;
-        font-weight: 900;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-    }
-
-    .eyebrow {
-        background: #ecfeff;
-        color: #0891b2;
-        border: 1px solid #cffafe;
-        padding: 7px 12px;
-        margin-bottom: 12px;
-    }
-
-    .section-kicker {
-        color: var(--ct-blue);
-        margin-bottom: 8px;
-    }
-
-    .warning-text {
-        color: #d97706;
-    }
-
-    .driver-orders-header h1 {
-        margin: 0;
-        color: var(--ct-slate-900);
-        font-size: clamp(28px, 4vw, 34px);
-        font-weight: 950;
-        letter-spacing: -0.05em;
-        line-height: 1.05;
-    }
-
-    .driver-orders-header p,
-    .route-planner-header p,
-    .missing-location-header p,
-    .panel-header p {
-        margin: 8px 0 0;
-        color: var(--ct-slate-500);
-        line-height: 1.6;
-    }
-
-    .driver-orders-header p {
-        max-width: 760px;
-    }
-
-    .header-actions,
-    .route-action-row,
-    .map-legend {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        flex-wrap: wrap;
-    }
-
-    .header-actions {
-        justify-content: flex-end;
-        flex-shrink: 0;
-    }
-
-    .primary-button,
-    .secondary-button,
-    .filter-form button,
-    .clear-button,
-    .small-button,
-    .mobile-driver-action-bar a,
-    .mobile-driver-action-bar button {
-        border: 0;
-        cursor: pointer;
-        text-decoration: none;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        min-height: 44px;
-        border-radius: 999px;
-        padding: 0 18px;
-        font-size: 14px;
-        font-weight: 950;
-        white-space: nowrap;
-        transition: transform 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
-    }
-
-    .primary-button,
-    .filter-form button {
-        background: linear-gradient(135deg, #2563eb, #06b6d4);
-        color: #ffffff;
-        box-shadow: 0 12px 22px rgba(37, 99, 235, 0.22);
-    }
-
-    .secondary-button,
-    .clear-button {
-        background: #f1f5f9;
-        color: #0f172a;
-        border: 1px solid #e2e8f0;
-    }
-
-    .primary-button:active,
-    .secondary-button:active,
-    .filter-form button:active,
-    .clear-button:active,
-    .mobile-driver-action-bar a:active,
-    .mobile-driver-action-bar button:active {
-        transform: scale(0.98);
-    }
-
-    .disabled-link {
-        opacity: 0.55;
-        pointer-events: none;
-    }
-
-    .flash-message,
-    .warning-box,
-    .route-message {
-        padding: 14px 16px;
-        border-radius: 16px;
-        font-size: 14px;
-        font-weight: 800;
-        line-height: 1.5;
-    }
-
-    .flash-message.success {
-        background: #f0fdf4;
-        color: #15803d;
-        border: 1px solid #bbf7d0;
-    }
-
-    .flash-message.error,
-    .warning-box {
-        background: #fffbeb;
-        color: #92400e;
-        border: 1px solid #fde68a;
-    }
-
-    .route-message {
-        background: #eff6ff;
-        color: #1d4ed8;
-        border: 1px solid #bfdbfe;
-        margin: 16px 0;
-    }
-
-    .route-message.warning {
-        background: #fffbeb;
-        color: #92400e;
-        border-color: #fde68a;
-    }
-
-    .route-message.success {
-        background: #f0fdf4;
-        color: #15803d;
-        border-color: #bbf7d0;
-    }
-
-    .route-summary-card span {
-        display: block;
-        color: var(--ct-slate-500);
-        font-size: 11px;
-        font-weight: 950;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        margin-bottom: 6px;
-    }
-
-    .route-summary-card strong {
-        display: block;
-        color: var(--ct-slate-900);
-        font-size: 26px;
-        font-weight: 950;
-        line-height: 1.1;
-        overflow-wrap: anywhere;
-    }
-
-    .route-summary-card small {
-        display: block;
-        margin-top: 6px;
-        color: var(--ct-slate-500);
-        font-size: 12px;
-        font-weight: 800;
-        line-height: 1.45;
-    }
-
-    .route-planner-panel,
-    .missing-location-panel,
-    .driver-orders-panel {
-        border-radius: 26px;
-        padding: 22px;
-    }
-
-    .route-planner-header,
-    .missing-location-header,
-    .panel-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 18px;
-        margin-bottom: 18px;
-    }
-
-    .route-planner-header h2,
-    .missing-location-header h2,
-    .panel-header h2 {
-        margin: 0;
-        color: var(--ct-slate-900);
-        font-size: clamp(20px, 3vw, 24px);
-        font-weight: 950;
-        letter-spacing: -0.04em;
-    }
-
-    .route-status-badge,
-    .missing-location-header > span,
-    .route-order-badge {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 999px;
-        padding: 7px 11px;
-        font-size: 12px;
-        font-weight: 950;
-        white-space: nowrap;
-    }
-
-    .route-status-badge {
-        background: #eff6ff;
-        color: #2563eb;
-        border: 1px solid #bfdbfe;
-    }
-
-    .route-status-badge.success {
-        background: #f0fdf4;
-        color: #15803d;
-        border-color: #bbf7d0;
-    }
-
-    .route-status-badge.warning {
-        background: #fffbeb;
-        color: #d97706;
-        border-color: #fde68a;
-    }
-
-    .route-status-badge.error {
-        background: #fef2f2;
-        color: #dc2626;
-        border-color: #fecaca;
-    }
-
-    .route-summary-grid {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 14px;
-        margin-bottom: 16px;
-    }
-
-    .route-summary-card {
-        min-width: 0;
-        border-radius: 22px;
-        border: 1px solid #e5e7eb;
-        background:
-            radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 45%),
-            #f8fafc;
-        padding: 16px;
-    }
-
-    .current-gps-card {
-        background: #f0fdf4;
-        border-color: #bbf7d0;
-    }
-
-    .current-gps-card.waiting {
-        background: #fffbeb;
-        border-color: #fde68a;
-    }
-
-    .route-action-row {
-        margin-bottom: 0;
-    }
-
-    .route-layout {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(330px, 410px);
-        gap: 16px;
-        align-items: stretch;
-    }
-
-    .map-card,
-    .optimized-route-card {
-        min-width: 0;
-        border-radius: 24px;
-        border: 1px solid #e5e7eb;
-        background: #f8fafc;
-        overflow: hidden;
-    }
-
-    .map-toolbar,
-    .optimized-route-header {
-        padding: 16px 18px;
-        border-bottom: 1px solid #e5e7eb;
-        background: #ffffff;
-    }
-
-    .map-toolbar {
-        display: flex;
-        justify-content: space-between;
-        gap: 14px;
-        align-items: center;
-    }
-
-    .map-toolbar strong,
-    .optimized-route-header strong {
-        display: block;
-        color: #0f172a;
-        font-size: 17px;
-        font-weight: 950;
-    }
-
-    .map-toolbar span,
-    .optimized-route-header small,
-    .optimized-route-header span {
-        display: block;
-        color: #64748b;
-        font-size: 12px;
-        font-weight: 800;
-        margin-top: 4px;
-        line-height: 1.4;
-    }
-
-    .optimized-route-header span {
-        color: #2563eb;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        font-size: 11px;
-        margin-top: 0;
-        margin-bottom: 5px;
-    }
-
-    .legend-dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 999px;
-        display: inline-flex;
-        margin-right: 6px;
-    }
-
-    .legend-dot.truck { background: #16a34a; }
-    .legend-dot.stop { background: #2563eb; }
-
-    .map-legend span {
-        color: #475569;
-        font-size: 12px;
-        font-weight: 900;
-        display: inline-flex;
-        align-items: center;
-        margin: 0;
-    }
-
-    #driverOrdersRouteMap {
-        width: 100%;
-        height: min(68vh, 640px);
-        min-height: 430px;
-        background: #e2e8f0;
-    }
-
-    .optimized-route-card {
-        display: flex;
-        flex-direction: column;
-        max-height: min(68vh, 640px);
-    }
-
-    .optimized-stop-list {
-        padding: 14px;
-        overflow-y: auto;
-        -webkit-overflow-scrolling: touch;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-    }
-
-    .optimized-stop-card {
-        width: 100%;
-        border: 1px solid #e5e7eb;
-        background: #ffffff;
-        border-radius: 18px;
-        padding: 14px;
-        display: flex;
-        gap: 12px;
-        align-items: flex-start;
-        text-align: left;
-        cursor: pointer;
-    }
-
-    .stop-number {
-        width: 34px;
-        height: 34px;
-        min-width: 34px;
-        border-radius: 12px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        background: linear-gradient(135deg, #2563eb, #06b6d4);
-        color: #ffffff;
-        font-size: 13px;
-        font-weight: 950;
-    }
-
-    .stop-body {
-        min-width: 0;
-        display: block;
-    }
-
-    .stop-body strong,
-    .missing-location-card strong {
-        display: block;
-        color: #0f172a;
-        font-size: 14px;
-        font-weight: 950;
-        overflow-wrap: anywhere;
-    }
-
-    .stop-body em,
-    .missing-location-card span {
-        display: block;
-        color: #2563eb;
-        font-size: 12px;
-        font-style: normal;
-        font-weight: 900;
-        margin-top: 3px;
-    }
-
-    .stop-body small,
-    .missing-location-card small {
-        display: block;
-        color: #64748b;
-        font-size: 12px;
-        font-weight: 750;
-        line-height: 1.45;
-        margin-top: 4px;
-        overflow-wrap: anywhere;
-    }
-
-    .stop-actions-inline {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        margin-top: 8px;
-    }
-
-    .stop-mini-action {
-        min-height: 30px;
-        border-radius: 999px;
-        padding: 0 10px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        background: #eff6ff;
-        color: #2563eb;
-        border: 1px solid #bfdbfe;
-        text-decoration: none;
-        font-size: 11px;
-        font-weight: 950;
-    }
-
-    .empty-route {
-        padding: 18px;
-        border-radius: 18px;
-        background: #ffffff;
-        color: #64748b;
-        font-size: 13px;
-        font-weight: 800;
-        line-height: 1.6;
-    }
-
-    .missing-location-header > span {
-        background: #fffbeb;
-        color: #d97706;
-        border: 1px solid #fde68a;
-    }
-
-    .missing-location-list {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 12px;
-    }
-
-    .missing-location-card {
-        border-radius: 18px;
-        border: 1px solid #fde68a;
-        background: #fffbeb;
-        padding: 14px;
-        min-width: 0;
-    }
-
-    .filter-form {
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        gap: 9px;
-        flex-wrap: wrap;
-    }
-
-    .search-input-wrap {
-        position: relative;
-    }
-
-    .search-input-wrap i {
-        position: absolute;
-        top: 50%;
-        left: 13px;
-        transform: translateY(-50%);
-        color: #94a3b8;
-        font-size: 14px;
-    }
-
-    .search-input-wrap input,
-    .filter-form select {
-        min-width: 220px;
-        height: 44px;
-        border: 1px solid #e2e8f0;
-        background: #f8fafc;
-        border-radius: 999px;
-        padding: 0 15px;
-        color: #0f172a;
-        font-size: 14px;
-        outline: none;
-    }
-
-    .search-input-wrap input {
-        padding-left: 38px;
-    }
-
-    .clear-button,
-    .small-button,
-    .filter-form button {
-        min-height: 40px;
-        padding: 0 14px;
-        font-size: 13px;
-    }
-
-    .table-wrapper {
-        overflow-x: auto;
-    }
-
-    .driver-table {
-        width: 100%;
-        border-collapse: collapse;
-    }
-
-    .driver-table th {
-        text-align: left;
-        padding: 14px;
-        color: #64748b;
-        font-size: 12px;
-        font-weight: 900;
-        text-transform: uppercase;
-        border-bottom: 1px solid #e5e7eb;
-        white-space: nowrap;
-    }
-
-    .driver-table td {
-        padding: 14px;
-        border-bottom: 1px solid #f1f5f9;
-        vertical-align: top;
-    }
-
-    .main-cell strong,
-    .date-cell strong {
-        display: block;
-        color: #0f172a;
-        font-size: 14px;
-        font-weight: 900;
-        overflow-wrap: anywhere;
-    }
-
-    .main-cell small,
-    .date-cell small,
-    .route-cell small {
-        display: block;
-        margin-top: 4px;
-        color: #64748b;
-        font-size: 12px;
-        font-weight: 700;
-    }
-
-    .route-cell span {
-        display: block;
-        color: #0f172a;
-        font-size: 13px;
-        font-weight: 800;
-        max-width: 320px;
-        overflow-wrap: anywhere;
-    }
-
-    .status-badge {
-        display: inline-flex;
-        border-radius: 999px;
-        padding: 6px 10px;
-        font-size: 11px;
-        font-weight: 900;
-        white-space: nowrap;
-    }
-
-    .status-pending { background: #fffbeb; color: #d97706; }
-    .status-approved { background: #eff6ff; color: #2563eb; }
-    .status-assigned,
-    .status-in_transit { background: #ecfeff; color: #0891b2; }
-    .status-delivered { background: #f0fdf4; color: #15803d; }
-    .status-cancelled { background: #fef2f2; color: #dc2626; }
-
-    .route-order-badge {
-        display: none;
-        background: #f1f5f9;
-        color: #475569;
-        border: 1px solid #e2e8f0;
-    }
-
-    .route-order-badge.active {
-        display: inline-flex;
-        background: #eff6ff;
-        color: #2563eb;
-        border-color: #bfdbfe;
-    }
-
-    .route-order-badge.next {
-        display: inline-flex;
-        background: #f0fdf4;
-        color: #15803d;
-        border-color: #bbf7d0;
-    }
-
-    .muted {
-        color: #94a3b8;
-        font-weight: 700;
-    }
-
-    .pagination-box {
-        margin-top: 18px;
-    }
-
-    .empty-state {
-        min-height: 180px;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        text-align: center;
-        color: #64748b;
-    }
-
-    .empty-state i {
-        font-size: 34px;
-        color: #2563eb;
-    }
-
-    .empty-state strong {
-        color: #0f172a;
-        font-size: 16px;
-        font-weight: 900;
-    }
-
-    .mobile-driver-action-bar {
-        display: none;
-    }
-
-    @media (max-width: 1240px) {
-        .route-summary-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-
-        .route-layout {
-            grid-template-columns: 1fr;
-        }
-
-        .optimized-route-card {
-            max-height: 520px;
-        }
-
-        .missing-location-list {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-    }
-
-    @media (max-width: 980px) {
-        .driver-orders-header,
-        .route-planner-header,
-        .missing-location-header,
-        .panel-header {
-            align-items: flex-start;
-            flex-direction: column;
-        }
-
-        .header-actions,
-        .filter-form,
-        .filter-form select,
-        .search-input-wrap,
-        .search-input-wrap input {
-            width: 100%;
-        }
-
-        .header-actions .primary-button,
-        .header-actions .secondary-button,
-        .route-action-row .primary-button,
-        .route-action-row .secondary-button,
-        .route-action-row a,
-        .filter-form button,
-        .clear-button {
-            flex: 1 1 180px;
-        }
-    }
-
-    @media (max-width: 760px) {
-        .driver-orders-page {
-            padding-bottom: calc(86px + env(safe-area-inset-bottom));
-        }
-
-        .driver-orders-header,
-        .route-planner-panel,
-        .missing-location-panel,
-        .driver-orders-panel {
-            border-radius: 20px;
-            padding: 16px;
-        }
-
-        .route-summary-grid,
-        .missing-location-list {
-            grid-template-columns: 1fr;
-        }
-
-        .route-summary-card,
-        .optimized-stop-card,
-        .missing-location-card {
-            border-radius: 18px;
-        }
-
-        .map-toolbar {
-            align-items: flex-start;
-            flex-direction: column;
-        }
-
-        #driverOrdersRouteMap {
-            height: 420px;
-            min-height: 360px;
-        }
-
-        .optimized-route-card {
-            max-height: none;
-        }
-
-        .optimized-stop-list {
-            max-height: 420px;
-        }
-
-        .driver-table,
-        .driver-table thead,
-        .driver-table tbody,
-        .driver-table th,
-        .driver-table td,
-        .driver-table tr {
-            display: block;
-        }
-
-        .driver-table thead {
-            display: none;
-        }
-
-        .driver-table tr {
-            border: 1px solid #e5e7eb;
-            border-radius: 20px;
-            padding: 12px;
-            margin-bottom: 12px;
-            background: #ffffff;
-            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
-        }
-
-        .driver-table td {
-            border-bottom: 0;
-            padding: 10px 0;
-            display: grid;
-            grid-template-columns: 120px minmax(0, 1fr);
-            gap: 12px;
-        }
-
-        .driver-table td::before {
-            content: attr(data-label);
-            color: #64748b;
-            font-size: 11px;
-            font-weight: 950;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
-
-        .route-cell span {
-            max-width: none;
-        }
-
-        .small-button {
-            width: 100%;
-        }
-
-        .mobile-driver-action-bar {
-            position: fixed;
-            left: 12px;
-            right: 12px;
-            bottom: calc(12px + env(safe-area-inset-bottom));
-            z-index: 999;
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 8px;
-            padding: 10px;
-            border-radius: 24px;
-            background: rgba(255, 255, 255, 0.94);
-            border: 1px solid rgba(226, 232, 240, 0.95);
-            box-shadow: 0 18px 42px rgba(15, 23, 42, 0.22);
-            backdrop-filter: blur(12px);
-        }
-
-        .mobile-driver-action-bar a,
-        .mobile-driver-action-bar button {
-            min-height: 50px;
-            padding: 0 10px;
-            border-radius: 18px;
-            background: #f1f5f9;
-            color: #0f172a;
-            border: 1px solid #e2e8f0;
-            font-size: 12px;
-            flex-direction: column;
-            gap: 4px;
-            box-shadow: none;
-        }
-
-        .mobile-driver-action-bar button {
-            background: linear-gradient(135deg, #2563eb, #06b6d4);
-            color: #ffffff;
-            box-shadow: 0 10px 20px rgba(37, 99, 235, 0.22);
-        }
-    }
-
-    @media (max-width: 480px) {
-        .driver-orders-header h1 {
-            font-size: 26px;
-        }
-
-        .header-actions .primary-button,
-        .header-actions .secondary-button,
-        .route-action-row .primary-button,
-        .route-action-row .secondary-button,
-        .route-action-row a {
-            flex-basis: 100%;
-            width: 100%;
-        }
-
-        .driver-table td {
-            grid-template-columns: 1fr;
-            gap: 4px;
-        }
-
-        #driverOrdersRouteMap {
-            height: 340px;
-            min-height: 320px;
-        }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-        .primary-button,
-        .secondary-button,
-        .filter-form button,
-        .clear-button,
-        .mobile-driver-action-bar a,
-        .mobile-driver-action-bar button {
-            transition: none;
-        }
-    }
-</style>
-@endpush
 
 @push('scripts')
 <script>
     const deliveryStops = @json($routeStops->values());
     const initialCurrentPosition = @json(($hasCurrentGps ?? false) ? ['lat' => (float) $currentLat, 'lng' => (float) $currentLng] : null);
     const googleApiKey = @json($googleMapsApiKey ?? '');
+    const softwareTelemetryUrl = @json(route('driver.telemetry.software-feed'));
+    const csrfToken = @json(csrf_token());
 
     const MAX_EXHAUSTIVE_ROUTE_STOPS = 10;
     const MAX_ROUTES_API_STOPS = 25;
+    const BROWSER_GPS_MAX_ACCURACY_METERS = 200;
 
     let driverOrdersRouteMap = null;
     let AdvancedMarkerElementClass = null;
@@ -1316,6 +395,10 @@
     let optimizedStops = [...deliveryStops];
     let routeHasBeenOptimized = false;
     let lastRouteResult = null;
+    let liveLocationWatchId = null;
+    let softwareTelemetryTimer = null;
+    let softwareTelemetryPosition = null;
+    let softwareTelemetryRequestPending = false;
 
     document.addEventListener('DOMContentLoaded', function () {
         renderStopList(optimizedStops, {
@@ -1370,9 +453,16 @@
     }
 
     function updateCurrentGpsDisplay(position, sourceText) {
+        const latitude = Number(position.lat);
+        const longitude = Number(position.lng);
+
+        if (!isUsableCoordinate(latitude, longitude)) {
+            return false;
+        }
+
         latestCurrentPosition = {
-            lat: Number(position.lat),
-            lng: Number(position.lng),
+            lat: latitude,
+            lng: longitude,
         };
 
         const gpsText = latestCurrentPosition.lat.toFixed(7) + ', ' + latestCurrentPosition.lng.toFixed(7);
@@ -1390,38 +480,192 @@
 
         setCurrentGpsCardState();
         updateCurrentTruckMarker();
+
+        return true;
     }
 
-    function useBrowserLocationForRoute() {
-        if (!navigator.geolocation) {
-            setRouteBadge('GPS unavailable', 'error');
-            setRouteMessage('Your browser does not support location access. Use ESP32 GPS telemetry instead.', 'warning');
+    function isUsableCoordinate(latitude, longitude) {
+        return Number.isFinite(latitude)
+            && Number.isFinite(longitude)
+            && latitude >= -90
+            && latitude <= 90
+            && longitude >= -180
+            && longitude <= 180
+            && !(latitude === 0 && longitude === 0);
+    }
+
+    function updateSoftwareTelemetryButton() {
+        const running = softwareTelemetryTimer !== null;
+
+        document.querySelectorAll('.software-telemetry-toggle').forEach(function (button) {
+            const label = button.querySelector('span');
+            const icon = button.querySelector('i');
+
+            if (label) {
+                label.innerText = running
+                    ? label.dataset.stopLabel
+                    : label.dataset.startLabel;
+            }
+
+            if (icon) {
+                icon.className = running ? 'bi bi-stop-circle' : 'bi bi-crosshair';
+            }
+        });
+    }
+
+    function rememberAccurateDevicePosition(position) {
+        const accuracy = Number(position?.coords?.accuracy);
+        const latitude = Number(position?.coords?.latitude);
+        const longitude = Number(position?.coords?.longitude);
+
+        if (!isUsableCoordinate(latitude, longitude)
+            || !Number.isFinite(accuracy)
+            || accuracy <= 0
+            || accuracy > BROWSER_GPS_MAX_ACCURACY_METERS) {
+            return false;
+        }
+
+        softwareTelemetryPosition = {
+            latitude,
+            longitude,
+            accuracy,
+        };
+
+        updateCurrentGpsDisplay({
+            lat: latitude,
+            lng: longitude,
+        }, `Live device location · estimated accuracy ±${Math.round(accuracy)} m.`);
+
+        return true;
+    }
+
+    async function publishSoftwareTelemetry() {
+        if (softwareTelemetryRequestPending) {
             return;
         }
 
-        setRouteBadge('Getting phone GPS', 'warning');
-        setRouteMessage('Requesting your phone GPS location...', 'warning');
+        softwareTelemetryRequestPending = true;
 
-        navigator.geolocation.getCurrentPosition(
-            function (position) {
-                updateCurrentGpsDisplay({
-                    lat: position.coords.latitude,
-                    lng: position.coords.longitude,
-                }, 'Using phone browser GPS fallback.');
-
-                optimizeDriverOrdersRoute(true);
-            },
-            function (error) {
-                console.error('Browser geolocation error:', error);
-                setRouteBadge('GPS denied', 'error');
-                setRouteMessage('Phone GPS permission was denied or unavailable. Use ESP32 GPS telemetry before optimizing.', 'warning');
-            },
-            {
-                enableHighAccuracy: true,
-                timeout: 12000,
-                maximumAge: 15000,
+        const payload = softwareTelemetryPosition
+            ? {
+                latitude: softwareTelemetryPosition.latitude,
+                longitude: softwareTelemetryPosition.longitude,
+                accuracy_meters: softwareTelemetryPosition.accuracy,
             }
-        );
+            : {};
+
+        try {
+            const response = await fetch(softwareTelemetryUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': csrfToken,
+                },
+                body: JSON.stringify(payload),
+            });
+            const result = await response.json();
+
+            if (!response.ok || !result.success) {
+                throw new Error(result.message || 'The software telemetry API rejected the update.');
+            }
+
+            const temperature = Number(result.data?.temperature);
+            const temperatureText = Number.isFinite(temperature)
+                ? `${temperature.toFixed(2)} °C simulated temperature`
+                : 'simulated temperature stored';
+            const locationText = result.data?.location_accepted
+                ? `live location ±${Math.round(Number(result.data.accuracy_meters))} m`
+                : 'waiting for an accurate device location';
+
+            setRouteBadge('API feed live', 'success');
+            setRouteMessage(`Software demo feed is active: ${temperatureText}; ${locationText}. Updates are saved every 5 seconds.`, 'success');
+        } catch (error) {
+            console.error('Software telemetry update failed:', error);
+            setRouteBadge('API feed error', 'error');
+            setRouteMessage(error.message || 'The software telemetry API could not save an update.', 'warning');
+        } finally {
+            softwareTelemetryRequestPending = false;
+        }
+    }
+
+    function startSoftwareTelemetryFeed(initialPosition = null) {
+        if (softwareTelemetryTimer !== null) {
+            if (initialPosition) {
+                rememberAccurateDevicePosition(initialPosition);
+            }
+
+            return;
+        }
+
+        if (initialPosition) {
+            rememberAccurateDevicePosition(initialPosition);
+        }
+
+        publishSoftwareTelemetry();
+        softwareTelemetryTimer = window.setInterval(publishSoftwareTelemetry, 5000);
+
+        if (navigator.geolocation) {
+            liveLocationWatchId = navigator.geolocation.watchPosition(
+                function (position) {
+                    if (!rememberAccurateDevicePosition(position)) {
+                        const accuracy = Number(position?.coords?.accuracy);
+                        const accuracyText = Number.isFinite(accuracy)
+                            ? ` The current estimate is only ±${Math.round(accuracy)} metres.`
+                            : '';
+
+                        setRouteBadge('Temperature feed live', 'warning');
+                        setRouteMessage(`Simulated temperature is updating, but the location is not accurate enough.${accuracyText}`, 'warning');
+                    }
+                },
+                function (error) {
+                    console.warn('Continuous browser location unavailable:', error);
+
+                    if (error.code === error.PERMISSION_DENIED) {
+                        setRouteBadge('Temperature feed live', 'warning');
+                        setRouteMessage('Simulated temperature is updating every 5 seconds. Enable precise location permission to include live GPS.', 'warning');
+                    }
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: 15000,
+                    maximumAge: 0,
+                }
+            );
+        }
+
+        updateSoftwareTelemetryButton();
+    }
+
+    function stopSoftwareTelemetryFeed() {
+        if (softwareTelemetryTimer !== null) {
+            window.clearInterval(softwareTelemetryTimer);
+            softwareTelemetryTimer = null;
+        }
+
+        if (liveLocationWatchId !== null && navigator.geolocation) {
+            navigator.geolocation.clearWatch(liveLocationWatchId);
+            liveLocationWatchId = null;
+        }
+
+        softwareTelemetryPosition = null;
+        updateSoftwareTelemetryButton();
+        setRouteBadge('API feed stopped', 'warning');
+        setRouteMessage('The software telemetry feed is stopped. No simulated temperature or device location updates are being saved.', 'warning');
+    }
+
+    function useBrowserLocationForRoute() {
+        if (softwareTelemetryTimer !== null) {
+            stopSoftwareTelemetryFeed();
+            return;
+        }
+
+        startSoftwareTelemetryFeed();
+        setRouteBadge('Starting API feed', 'warning');
+        setRouteMessage(navigator.geolocation
+            ? 'Simulated temperature is starting now while this device searches for a precise live location.'
+            : 'Simulated temperature is starting now. This browser cannot provide live location.', 'warning');
     }
 
     async function optimizeDriverOrdersRoute(shouldFocus) {
@@ -1433,7 +677,7 @@
 
         if (!latestCurrentPosition) {
             setRouteBadge('GPS needed', 'warning');
-            setRouteMessage('ColdTrace needs your current truck GPS before it can calculate the shortest delivery sequence. Wait for ESP32 GPS or tap <strong>Use My Phone GPS</strong>.', 'warning');
+            setRouteMessage('ColdTrace needs a recent truck position before it can calculate the route. Wait for ESP32 GPS or tap <strong>Use Device Location</strong>.', 'warning');
             return;
         }
 
@@ -1974,21 +1218,22 @@
     }
 
     function createMarkerContent(label, type) {
+        if (type === 'truck') {
+            return window.createColdTraceTruckMarker(@json(auth()->user()->assignedTruck?->id));
+        }
         const marker = document.createElement('div');
-        marker.style.width = type === 'truck' ? '46px' : '38px';
-        marker.style.height = type === 'truck' ? '46px' : '38px';
-        marker.style.borderRadius = type === 'truck' ? '999px' : '14px';
+        marker.style.width = '38px';
+        marker.style.height = '38px';
+        marker.style.borderRadius = '14px';
         marker.style.display = 'flex';
         marker.style.alignItems = 'center';
         marker.style.justifyContent = 'center';
         marker.style.color = '#ffffff';
         marker.style.fontWeight = '950';
-        marker.style.fontSize = type === 'truck' ? '13px' : '14px';
+        marker.style.fontSize = '14px';
         marker.style.boxShadow = '0 10px 24px rgba(15, 23, 42, 0.26)';
         marker.style.border = '3px solid #ffffff';
-        marker.style.background = type === 'truck'
-            ? 'linear-gradient(135deg, #16a34a, #15803d)'
-            : 'linear-gradient(135deg, #2563eb, #1d4ed8)';
+        marker.style.background = 'linear-gradient(135deg, #2563eb, #1d4ed8)';
         marker.innerText = label;
 
         return marker;
@@ -2200,8 +1445,11 @@
     const expectedDeviceCode = @json($expectedDeviceCode);
 
     function shouldAcceptDriverPayload(data) {
+        // With no device paired to this driver's truck there is no reading that
+        // legitimately belongs to them, so nothing on the wildcard topic is
+        // accepted. Showing another truck's position would be worse than none.
         if (!expectedDeviceCode) {
-            return true;
+            return false;
         }
 
         return data.device_code === expectedDeviceCode;
@@ -2212,17 +1460,39 @@
             return;
         }
 
-        const latitude = data.latitude ?? null;
-        const longitude = data.longitude ?? null;
-
-        if (latitude === null || longitude === null) {
+        if (data.latitude === null || data.latitude === undefined
+            || data.longitude === null || data.longitude === undefined) {
             return;
         }
 
+        const latitude = Number(data.latitude);
+        const longitude = Number(data.longitude);
+        const satellites = data.satellites === undefined ? null : Number(data.satellites);
+        const hdop = data.hdop === undefined ? null : Number(data.hdop);
+
+        if (data.gps_valid !== true || !isUsableCoordinate(latitude, longitude)) {
+            return;
+        }
+
+        if ((satellites !== null && (!Number.isFinite(satellites) || satellites < 4))
+            || (hdop !== null && (!Number.isFinite(hdop) || hdop > 5))) {
+            return;
+        }
+
+        const qualityParts = ['Live verified ESP32 GPS'];
+
+        if (satellites !== null) {
+            qualityParts.push(`${satellites} satellites`);
+        }
+
+        if (hdop !== null) {
+            qualityParts.push(`HDOP ${hdop.toFixed(1)}`);
+        }
+
         updateCurrentGpsDisplay({
-            lat: Number(latitude),
-            lng: Number(longitude),
-        }, data.gps_valid ? 'Using live ESP32 GPS telemetry.' : 'ESP32 coordinates received, GPS not marked valid.');
+            lat: latitude,
+            lng: longitude,
+        }, `${qualityParts.join(' · ')}.`);
 
         if (routeHasBeenOptimized) {
             updateMapsButtons(buildGoogleMapsMultiStopUrl(optimizedStops));

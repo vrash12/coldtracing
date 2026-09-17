@@ -54,26 +54,26 @@
 
         <div class="ct-panel-body ct-panel-body-flush">
             <div class="ct-table-wrap">
-                <table class="ct-table">
+                <table class="ct-table ct-order-table">
                     <thead><tr><th>Order</th><th>Products</th><th>Destination</th><th>Expected delivery</th><th>Status</th><th>Actions</th></tr></thead>
                     <tbody>
                         @forelse ($orders as $order)
                             <tr>
-                                <td><strong>{{ $order->order_code }}</strong><small>Requested {{ $order->created_at?->format('M d, Y · h:i A') }}</small></td>
-                                <td><div class="ct-product-list">@forelse ($order->orderItems->take(2) as $item)<span>{{ $item->product?->name ?? 'N/A' }}</span><small>{{ $item->quantity }} {{ $item->unit }}</small>@empty<span>No products</span>@endforelse</div></td>
-                                <td><span class="ct-address" title="{{ $order->delivery_address }}">{{ $order->delivery_address }}</span></td>
-                                <td><strong>{{ $order->expected_delivery_at?->format('M d, Y') ?? 'Schedule pending' }}</strong><small>{{ $order->expected_delivery_at?->format('h:i A') }}</small></td>
-                                <td><x-dashboard.status-badge :status="$order->status" /></td>
-                                <td>
+                                <td data-label="Order"><strong>{{ $order->order_code }}</strong><small>Requested {{ $order->created_at?->format('M d, Y · h:i A') }}</small></td>
+                                <td data-label="Products"><div class="ct-product-list">@forelse ($order->orderItems->take(2) as $item)<span>{{ $item->product?->name ?? 'N/A' }}</span><small>{{ $item->quantity }} {{ $item->unit }}</small>@empty<span>No products</span>@endforelse</div></td>
+                                <td data-label="Destination"><span class="ct-address" title="{{ $order->delivery_address }}">{{ $order->delivery_address }}</span></td>
+                                <td data-label="Expected"><strong>{{ $order->expected_delivery_at?->format('M d, Y') ?? 'Schedule pending' }}</strong><small>{{ $order->expected_delivery_at?->format('h:i A') }}</small></td>
+                                <td data-label="Status"><x-dashboard.status-badge :status="$order->status" /></td>
+                                <td data-label="Actions">
                                     <div class="ct-inline-actions">
-                                        <a href="{{ route('customer.orders.show', $order) }}" class="ct-icon-button" title="View order"><i class="bi bi-eye-fill"></i></a>
+                                        <a href="{{ route('customer.orders.show', $order) }}" class="ct-row-action" title="View order"><i class="bi bi-eye-fill"></i><span>View</span></a>
                                         @if ($order->status === 'pending')
-                                            <a href="{{ route('customer.orders.edit', $order) }}" class="ct-icon-button" title="Edit pending order"><i class="bi bi-pencil-fill"></i></a>
+                                            <a href="{{ route('customer.orders.edit', $order) }}" class="ct-row-action" title="Edit pending order"><i class="bi bi-pencil-fill"></i><span>Edit</span></a>
                                         @endif
                                         @if (in_array($order->status, ['pending', 'approved'], true))
                                             <form method="POST" action="{{ route('customer.orders.cancel', $order) }}" onsubmit="return confirm('Cancel this order?');">
                                                 @csrf @method('PATCH')
-                                                <button type="submit" class="ct-icon-button warning" title="Cancel order"><i class="bi bi-x-circle-fill"></i></button>
+                                                <button type="submit" class="ct-row-action warning" title="Cancel order"><i class="bi bi-x-circle-fill"></i><span>Cancel</span></button>
                                             </form>
                                         @endif
                                     </div>
@@ -90,6 +90,3 @@
     </section>
 </div>
 @endsection
-
-@include('dashboard.partials.role-dashboard-styles')
-@include('dashboard.partials.role-index-styles')

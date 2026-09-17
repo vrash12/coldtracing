@@ -63,28 +63,28 @@
 
         <div class="ct-panel-body ct-panel-body-flush">
             <div class="ct-table-wrap">
-                <table class="ct-table">
+                <table class="ct-table ct-order-table">
                     <thead><tr><th>Order</th><th>Customer</th><th>Products</th><th>Driver</th><th>Destination</th><th>Expected</th><th>Status</th><th>Actions</th></tr></thead>
                     <tbody>
                         @forelse ($orders as $order)
                             <tr>
-                                <td><strong>{{ $order->order_code }}</strong><small>{{ $order->created_at?->format('M d, Y · h:i A') }}</small></td>
-                                <td><strong>{{ $order->receiver?->name ?? 'No receiver' }}</strong><small>{{ $order->receiver?->phone ?? $order->receiver?->email ?? 'No contact' }}</small></td>
-                                <td><div class="ct-product-list">@forelse ($order->orderItems->take(2) as $item)<span>{{ $item->product?->name ?? 'N/A' }}</span><small>{{ $item->quantity }} {{ $item->unit }}</small>@empty<span>No products</span>@endforelse</div></td>
-                                <td><strong>{{ $order->driver?->name ?? 'Not assigned' }}</strong><small>{{ $order->trip?->truck?->plate_number ?? 'No truck' }}</small></td>
-                                <td><span class="ct-address" title="{{ $order->delivery_address }}">{{ $order->delivery_address }}</span></td>
-                                <td><strong>{{ $order->expected_delivery_at?->format('M d, Y') ?? 'Not set' }}</strong><small>{{ $order->expected_delivery_at?->format('h:i A') }}</small></td>
-                                <td><x-dashboard.status-badge :status="$order->status" /></td>
-                                <td>
+                                <td data-label="Order"><strong>{{ $order->order_code }}</strong><small>{{ $order->created_at?->format('M d, Y · h:i A') }}</small></td>
+                                <td data-label="Customer"><strong>{{ $order->receiver?->name ?? 'No receiver' }}</strong><small>{{ $order->receiver?->phone ?? $order->receiver?->email ?? 'No contact' }}</small></td>
+                                <td data-label="Products"><div class="ct-product-list">@forelse ($order->orderItems->take(2) as $item)<span>{{ $item->product?->name ?? 'N/A' }}</span><small>{{ $item->quantity }} {{ $item->unit }}</small>@empty<span>No products</span>@endforelse</div></td>
+                                <td data-label="Driver"><strong>{{ $order->driver?->name ?? 'Not assigned' }}</strong><small>{{ $order->trip?->truck?->plate_number ?? 'No truck' }}</small></td>
+                                <td data-label="Destination"><span class="ct-address" title="{{ $order->delivery_address }}">{{ $order->delivery_address }}</span></td>
+                                <td data-label="Expected"><strong>{{ $order->expected_delivery_at?->format('M d, Y') ?? 'Not set' }}</strong><small>{{ $order->expected_delivery_at?->format('h:i A') }}</small></td>
+                                <td data-label="Status"><x-dashboard.status-badge :status="$order->status" /></td>
+                                <td data-label="Actions">
                                     <div class="ct-inline-actions">
-                                        <a href="{{ route('orders.show', $order) }}" class="ct-icon-button" title="View order"><i class="bi bi-eye-fill"></i></a>
+                                        <a href="{{ route('orders.show', $order) }}" class="ct-row-action" title="View order"><i class="bi bi-eye-fill"></i><span>View</span></a>
                                         @if (! in_array($order->status, ['in_transit', 'delivered', 'cancelled'], true))
-                                            <a href="{{ route('orders.edit', $order) }}" class="ct-icon-button" title="Edit or assign"><i class="bi bi-pencil-fill"></i></a>
+                                            <a href="{{ route('orders.edit', $order) }}" class="ct-row-action" title="Edit or assign"><i class="bi bi-pencil-fill"></i><span>{{ $order->driver_id ? 'Edit' : 'Assign' }}</span></a>
                                         @endif
                                         @if ($order->canBeCancelled())
-                                            <form method="POST" action="{{ route('orders.cancel', $order) }}" onsubmit="return confirm('Cancel this order?');">
+                                            <form method="POST" action="{{ route('orders.cancel', $order) }}" data-confirm="Cancel this order? Its trip is cancelled too and the truck is released." data-confirm-action="Cancel order">
                                                 @csrf @method('PATCH')
-                                                <button type="submit" class="ct-icon-button warning" title="Cancel order"><i class="bi bi-x-circle-fill"></i></button>
+                                                <button type="submit" class="ct-row-action warning" title="Cancel order"><i class="bi bi-x-circle-fill"></i><span>Cancel</span></button>
                                             </form>
                                         @endif
                                     </div>
@@ -101,6 +101,3 @@
     </section>
 </div>
 @endsection
-
-@include('dashboard.partials.role-dashboard-styles')
-@include('dashboard.partials.role-index-styles')

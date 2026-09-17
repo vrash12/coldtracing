@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Customer;
 use App\Http\Controllers\Controller;
 use App\Models\Order;
 use App\Models\Trip;
+use App\Services\ColdChain\TemperatureStatusService;
 use Illuminate\Support\Facades\Auth;
 
 class DashboardController extends Controller
@@ -22,8 +23,9 @@ class DashboardController extends Controller
     /**
      * Display the customer dashboard.
      */
-    public function index()
-    {
+    public function index(
+        TemperatureStatusService $temperatureStatusService
+    ) {
         $this->authorizeCustomer();
 
         $customer = Auth::user();
@@ -63,6 +65,18 @@ class DashboardController extends Controller
             ->latest('id')
             ->take(4)
             ->get();
+
+        $currentDeliveries->each(function (Trip $trip) use (
+            $temperatureStatusService
+        ) {
+            $trip->setAttribute(
+                'temperature_state',
+                $temperatureStatusService->evaluate(
+                    $trip->latestTelemetry?->temperature,
+                    $trip->product
+                )
+            );
+        });
 
         return view('customer.dashboard', compact(
             'customer',

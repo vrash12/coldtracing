@@ -30,4 +30,17 @@ class Device extends Model
     {
         return $this->hasMany(TelemetryLog::class);
     }
+
+    public function latestTelemetry()
+    {
+        return $this->hasOne(TelemetryLog::class)->latestOfMany('recorded_at');
+    }
+
+    public function latestGpsTelemetry()
+    {
+        return $this->hasOne(TelemetryLog::class)
+            ->ofMany(['recorded_at' => 'max', 'id' => 'max'], function ($query) {
+                $query->whereNotNull('latitude')->whereNotNull('longitude');
+            });
+    }
 }

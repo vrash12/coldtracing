@@ -6,7 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Alert;
 use App\Models\Order;
 use App\Models\Trip;
-use App\Notifications\OrderAssignedToDriverNotification;
+use App\Services\ColdChain\TemperatureStatusService;
 use Illuminate\Support\Facades\Auth;
 
 class DashboardController extends Controller
@@ -18,8 +18,9 @@ class DashboardController extends Controller
         }
     }
 
-    public function index()
-    {
+    public function index(
+        TemperatureStatusService $temperatureStatusService
+    ) {
         $this->authorizeDriver();
 
         $driver = Auth::user();
@@ -54,6 +55,18 @@ class DashboardController extends Controller
             ->take(5)
             ->get();
 
+        $currentTrips->each(function (Trip $trip) use (
+            $temperatureStatusService
+        ) {
+            $trip->setAttribute(
+                'temperature_state',
+                $temperatureStatusService->evaluate(
+                    $trip->latestTelemetry?->temperature,
+                    $trip->product
+                )
+            );
+        });
+
         $openAlerts = Alert::with([
             'trip.truck',
             'trip.product',
@@ -67,11 +80,9 @@ class DashboardController extends Controller
             ->get();
 
         $unreadNotificationCount = $driver->unreadNotifications()
-            ->where('type', OrderAssignedToDriverNotification::class)
             ->count();
 
-        $unreadOrderNotifications = $driver->unreadNotifications()
-            ->where('type', OrderAssignedToDriverNotification::class)
+        $unreadNotifications = $driver->unreadNotifications()
             ->latest()
             ->take(4)
             ->get();
@@ -90,7 +101,7 @@ class DashboardController extends Controller
             'currentTrips',
             'openAlerts',
             'unreadNotificationCount',
-            'unreadOrderNotifications',
+            'unreadNotifications',
             'latestTelemetryAt',
         ));
     }

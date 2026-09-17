@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Driver;
 
 use App\Http\Controllers\Controller;
 use App\Models\Trip;
+use App\Services\ColdChain\TemperatureStatusService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -72,8 +73,10 @@ class TripController extends Controller
         ));
     }
 
-    public function show(Trip $trip)
-    {
+    public function show(
+        Trip $trip,
+        TemperatureStatusService $temperatureStatusService
+    ) {
         $this->authorizeDriverTrip($trip);
 
         $trip->load([
@@ -90,10 +93,16 @@ class TripController extends Controller
             },
         ]);
 
+        $temperatureState = $temperatureStatusService->evaluate(
+            $trip->latestTelemetry?->temperature,
+            $trip->product
+        );
+
         $mapsUrl = $this->buildGoogleMapsUrl($trip);
 
         return view('driver.trips.show', compact(
             'trip',
+            'temperatureState',
             'mapsUrl'
         ));
     }

@@ -28,7 +28,7 @@
         <x-dashboard.metric label="Ready to start" :value="$pendingTrips" detail="Trips awaiting departure" icon="bi-play-circle-fill" tone="amber" :href="route('driver.orders.index', ['status' => 'assigned'])" />
         <x-dashboard.metric label="Active trips" :value="$activeTrips" detail="Deliveries currently underway" icon="bi-truck-front-fill" tone="cyan" :href="route('driver.orders.index', ['status' => 'in_transit'])" />
         <x-dashboard.metric label="Assigned orders" :value="$assignedOrders" detail="Current delivery workload" icon="bi-box-seam-fill" tone="blue" :href="route('driver.orders.index')" />
-        <x-dashboard.metric label="Unread updates" :value="$unreadNotificationCount" detail="New assignment notifications" icon="bi-bell-fill" :tone="$unreadNotificationCount > 0 ? 'violet' : 'green'" />
+        <x-dashboard.metric label="Unread updates" :value="$unreadNotificationCount" detail="Assignments and temperature alerts" icon="bi-bell-fill" :tone="$unreadNotificationCount > 0 ? 'violet' : 'green'" />
     </section>
 
     <div class="ct-grid-main">
@@ -45,27 +45,15 @@
                     @forelse ($currentTrips as $trip)
                         @php
                             $reading = $trip->latestTelemetry;
-                            $temperature = $reading?->temperature !== null ? (float) $reading->temperature : null;
-                            $minimum = $trip->product?->min_temp !== null ? (float) $trip->product->min_temp : null;
-                            $maximum = $trip->product?->max_temp !== null ? (float) $trip->product->max_temp : null;
-
-                            if ($temperature === null || $minimum === null || $maximum === null) {
-                                $conditionClass = 'neutral';
-                                $conditionLabel = 'No current reading';
-                                $conditionIcon = 'bi-dash-circle';
-                            } elseif ($temperature > $maximum) {
-                                $conditionClass = 'danger';
-                                $conditionLabel = number_format($temperature, 1) . ' °C · Too high';
-                                $conditionIcon = 'bi-thermometer-high';
-                            } elseif ($temperature < $minimum) {
-                                $conditionClass = 'warning';
-                                $conditionLabel = number_format($temperature, 1) . ' °C · Too low';
-                                $conditionIcon = 'bi-thermometer-low';
-                            } else {
-                                $conditionClass = 'safe';
-                                $conditionLabel = number_format($temperature, 1) . ' °C · Safe';
-                                $conditionIcon = 'bi-shield-check';
-                            }
+                            $temperatureState = $trip->temperature_state;
+                            $temperature = $temperatureState['temperature'];
+                            $conditionClass = $temperatureState['class'] === 'critical'
+                                ? 'danger'
+                                : $temperatureState['class'];
+                            $conditionLabel = $temperature === null
+                                ? 'No current reading'
+                                : number_format($temperature, 1) . ' °C · ' . $temperatureState['label'];
+                            $conditionIcon = $temperatureState['icon'];
 
                             $destination = $trip->destination_lat !== null && $trip->destination_lng !== null
                                 ? $trip->destination_lat . ',' . $trip->destination_lng
@@ -102,7 +90,7 @@
                                         <button type="submit" class="ct-button ct-button-success ct-button-small"><i class="bi bi-play-fill"></i>Start trip</button>
                                     </form>
                                 @elseif ($trip->status === 'in_progress')
-                                    <form method="POST" action="{{ route('driver.trips.complete', $trip) }}" onsubmit="return confirm('Mark this delivery as completed?');">
+                                    <form method="POST" action="{{ route('driver.trips.complete', $trip) }}" data-confirm="Mark this delivery as completed? The order becomes delivered and your truck is released." data-confirm-action="Complete delivery">
                                         @csrf
                                         @method('PATCH')
                                         <input type="hidden" name="return_to" value="dashboard">
@@ -160,13 +148,13 @@
 
             <section class="ct-panel">
                 <header class="ct-panel-header">
-                    <div class="ct-panel-heading"><span class="ct-panel-icon"><i class="bi bi-bell-fill"></i></span><div class="ct-panel-title"><small>Assignments</small><h2>Unread updates</h2></div></div>
+                    <div class="ct-panel-heading"><span class="ct-panel-icon"><i class="bi bi-bell-fill"></i></span><div class="ct-panel-title"><small>Assignments & alerts</small><h2>Unread updates</h2></div></div>
                     @if ($unreadNotificationCount > 0)
                         <form method="POST" action="{{ route('driver.notifications.readAll') }}">@csrf @method('PATCH')<button class="ct-panel-link" type="submit">Mark all read</button></form>
                     @endif
                 </header>
                 <div class="ct-panel-body"><div class="ct-list">
-                    @forelse ($unreadOrderNotifications as $notification)
+                    @forelse ($unreadNotifications as $notification)
                         @php $notice = $notification->data ?? []; @endphp
                         <div class="ct-row-card">
                             <span class="ct-row-icon"><i class="bi bi-bell-fill"></i></span>
@@ -174,7 +162,7 @@
                             <form method="POST" action="{{ route('driver.notifications.read', $notification->id) }}">@csrf @method('PATCH')<button type="submit" class="ct-button ct-button-light ct-button-small" aria-label="Mark notification read"><i class="bi bi-check2"></i></button></form>
                         </div>
                     @empty
-                        <x-dashboard.empty-state icon="bi-bell-slash" title="You are up to date" message="New assignment notifications will appear here." />
+                        <x-dashboard.empty-state icon="bi-bell-slash" title="You are up to date" message="New assignment and temperature notifications will appear here." />
                     @endforelse
                 </div></div>
             </section>
@@ -182,5 +170,3 @@
     </div>
 </div>
 @endsection
-
-@include('dashboard.partials.role-dashboard-styles')

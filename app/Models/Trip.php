@@ -2,8 +2,8 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
 
 class Trip extends Model
 {
@@ -71,6 +71,14 @@ class Trip extends Model
     public function latestTelemetry()
     {
         return $this->hasOne(TelemetryLog::class)->latestOfMany('recorded_at');
+    }
+
+    public function latestGpsTelemetry()
+    {
+        return $this->hasOne(TelemetryLog::class)
+            ->whereNotNull('latitude')
+            ->whereNotNull('longitude')
+            ->latestOfMany('recorded_at');
     }
 
     public function alerts()

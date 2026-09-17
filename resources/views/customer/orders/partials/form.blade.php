@@ -1,104 +1,87 @@
 @php
     $order = $order ?? null;
     $isEditing = $order !== null;
-
     $oldItems = old('items');
 
-    if (!$oldItems && $order && $order->orderItems->count()) {
-        $oldItems = $order->orderItems->map(function ($item) {
-            return [
-                'product_id' => $item->product_id,
-                'quantity' => $item->quantity,
-                'unit' => in_array($item->unit, ['kg', 'gram']) ? $item->unit : 'kg',
-            ];
-        })->toArray();
+    if (! $oldItems && $order && $order->orderItems->count()) {
+        $oldItems = $order->orderItems->map(fn ($item) => [
+            'product_id' => $item->product_id,
+            'quantity' => $item->quantity,
+            'unit' => in_array($item->unit, ['kg', 'gram'], true) ? $item->unit : 'kg',
+        ])->toArray();
     }
 
-    if (!$oldItems) {
-        $oldItems = [
-            [
-                'product_id' => '',
-                'quantity' => 1,
-                'unit' => 'kg',
-            ],
-        ];
-    }
+    $oldItems = $oldItems ?: [[
+        'product_id' => '',
+        'quantity' => 1,
+        'unit' => 'kg',
+    ]];
 
     $savedAddress = $customer->permanent_delivery_address;
     $savedLat = $customer->permanent_delivery_lat;
     $savedLng = $customer->permanent_delivery_lng;
-
     $hasSavedAddress = $savedAddress && $savedLat !== null && $savedLng !== null;
 
     $deliveryAddress = old(
         'delivery_address',
         $order?->delivery_address ?: ($hasSavedAddress ? $savedAddress : '')
     );
-
     $deliveryLat = old(
         'delivery_lat',
         $order?->delivery_lat ?: ($hasSavedAddress ? $savedLat : '')
     );
-
     $deliveryLng = old(
         'delivery_lng',
         $order?->delivery_lng ?: ($hasSavedAddress ? $savedLng : '')
     );
 
-    $shouldSaveAddress = old('save_permanent_address', !$hasSavedAddress && !$isEditing);
+    $shouldSaveAddress = old('save_permanent_address', ! $hasSavedAddress && ! $isEditing);
 @endphp
 
-{{-- PRODUCTS --}}
-<section class="form-section-card">
-    <div class="section-header">
-        <div class="section-icon">
-            <i class="bi bi-basket"></i>
+<section class="form-section-card order-step-card">
+    <header class="section-header order-step-header">
+        <span class="order-step-number" aria-hidden="true">1</span>
+        <div class="order-step-copy">
+            <h2>What are we delivering?</h2>
+            <p>Select an item and enter its quantity. Add another row only when needed.</p>
         </div>
-
-        <div>
-            <h2>Product Information</h2>
-            <p>Choose the products you want to order. You may add more than one item.</p>
-        </div>
-    </div>
+        <button type="button" class="add-product-button" onclick="addOrderItem()">
+            <i class="bi bi-plus-lg"></i>
+            Add item
+        </button>
+    </header>
 
     <div class="order-items-card">
-        <div class="order-items-header">
-            <div>
-                <strong>Selected Products</strong>
-                <span>Units are limited to kilogram and gram.</span>
-            </div>
-
-            <button type="button" class="add-product-button" onclick="addOrderItem()">
-                <i class="bi bi-plus-circle"></i>
-                Add Product
-            </button>
-        </div>
-
-        <div id="orderItemsList">
+        <div id="orderItemsList" class="order-items-list">
             @foreach ($oldItems as $index => $item)
+                @php
+                    $selectedUnit = in_array(($item['unit'] ?? 'kg'), ['kg', 'gram'], true)
+                        ? ($item['unit'] ?? 'kg')
+                        : 'kg';
+                @endphp
+
                 <div class="order-item-row">
                     <div class="form-group product-field">
-                        <label>Product</label>
-
-                        <select name="items[{{ $index }}][product_id]" required>
-                            <option value="">Select product</option>
-
+                        <label for="item_product_{{ $index }}">Product</label>
+                        <select id="item_product_{{ $index }}" name="items[{{ $index }}][product_id]" required>
+                            <option value="">Choose a product</option>
                             @foreach ($products as $product)
                                 <option
                                     value="{{ $product->id }}"
                                     {{ (string) ($item['product_id'] ?? '') === (string) $product->id ? 'selected' : '' }}
                                 >
-                                    {{ $product->name }} | {{ $product->min_temp }}°C to {{ $product->max_temp }}°C
+                                    {{ $product->name }}
                                 </option>
                             @endforeach
                         </select>
                     </div>
 
                     <div class="form-group quantity-field">
-                        <label>Quantity</label>
-
+                        <label for="item_quantity_{{ $index }}">Quantity</label>
                         <input
+                            id="item_quantity_{{ $index }}"
                             type="number"
+                            inputmode="decimal"
                             step="0.01"
                             min="0.01"
                             name="items[{{ $index }}][quantity]"
@@ -108,28 +91,21 @@
                     </div>
 
                     <div class="form-group unit-field">
-                        <label>Unit</label>
-
-                        @php
-                            $selectedUnit = $item['unit'] ?? 'kg';
-
-                            if (!in_array($selectedUnit, ['kg', 'gram'])) {
-                                $selectedUnit = 'kg';
-                            }
-                        @endphp
-
-                        <select name="items[{{ $index }}][unit]" required>
-                            <option value="kg" {{ $selectedUnit === 'kg' ? 'selected' : '' }}>
-                                Kilogram
-                            </option>
-                            <option value="gram" {{ $selectedUnit === 'gram' ? 'selected' : '' }}>
-                                Gram
-                            </option>
+                        <label for="item_unit_{{ $index }}">Unit</label>
+                        <select id="item_unit_{{ $index }}" name="items[{{ $index }}][unit]" required>
+                            <option value="kg" {{ $selectedUnit === 'kg' ? 'selected' : '' }}>kg</option>
+                            <option value="gram" {{ $selectedUnit === 'gram' ? 'selected' : '' }}>gram</option>
                         </select>
                     </div>
 
-                    <button type="button" class="remove-product-button" onclick="removeOrderItem(this)">
-                        <i class="bi bi-trash"></i>
+                    <button
+                        type="button"
+                        class="remove-product-button"
+                        onclick="removeOrderItem(this)"
+                        aria-label="Remove this item"
+                        title="Remove item"
+                    >
+                        <i class="bi bi-trash3"></i>
                     </button>
                 </div>
             @endforeach
@@ -139,188 +115,129 @@
     @error('items')
         <small class="error-text">{{ $message }}</small>
     @enderror
-
     @error('items.*.product_id')
         <small class="error-text">{{ $message }}</small>
     @enderror
-
     @error('items.*.quantity')
         <small class="error-text">{{ $message }}</small>
     @enderror
-
     @error('items.*.unit')
         <small class="error-text">{{ $message }}</small>
     @enderror
 </section>
 
-{{-- DELIVERY SCHEDULE --}}
-<section class="form-section-card">
-    <div class="section-header">
-        <div class="section-icon">
-            <i class="bi bi-calendar-check"></i>
+<section class="form-section-card order-step-card delivery-location-section">
+    <header class="section-header order-step-header">
+        <span class="order-step-number" aria-hidden="true">2</span>
+        <div class="order-step-copy">
+            <h2>Where and when?</h2>
+            <p>Choose the destination. A preferred delivery time is optional.</p>
+        </div>
+    </header>
+
+    <div class="delivery-basics-grid">
+        <div class="form-group">
+            <label for="expected_delivery_at">Preferred date and time <span class="field-optional">Optional</span></label>
+            <input
+                type="datetime-local"
+                id="expected_delivery_at"
+                name="expected_delivery_at"
+                value="{{ old('expected_delivery_at', $order?->expected_delivery_at?->format('Y-m-d\TH:i')) }}"
+                @unless ($isEditing) min="{{ now()->format('Y-m-d\TH:i') }}" @endunless
+            >
+            @error('expected_delivery_at')
+                <small class="error-text">{{ $message }}</small>
+            @enderror
         </div>
 
-        <div>
-            <h2>Delivery Schedule</h2>
-            <p>Choose your preferred delivery date and time, if available.</p>
+        <div class="selected-location-summary">
+            <span class="selected-location-icon"><i class="bi bi-geo-alt-fill"></i></span>
+            <span class="selected-location-copy">
+                <small>Delivery destination</small>
+                <strong id="selectedLocationText" aria-live="polite">
+                    {{ $deliveryAddress ?: 'No location selected' }}
+                </strong>
+            </span>
+            <button
+                type="button"
+                id="clearLocationButton"
+                class="clear-location-button"
+                onclick="clearSelectedLocation()"
+                {{ $deliveryAddress ? '' : 'hidden' }}
+            >
+                Clear
+            </button>
         </div>
     </div>
 
-    <div class="form-group">
-        <label for="expected_delivery_at">Expected Delivery Date</label>
-
-        <input
-            type="datetime-local"
-            id="expected_delivery_at"
-            name="expected_delivery_at"
-            value="{{ old('expected_delivery_at', $order?->expected_delivery_at?->format('Y-m-d\TH:i')) }}"
-        >
-
-        @error('expected_delivery_at')
-            <small class="error-text">{{ $message }}</small>
-        @enderror
-    </div>
-</section>
-
-{{-- DELIVERY LOCATION --}}
-<section class="form-section-card delivery-location-section">
-    <div class="section-header">
-        <div class="section-icon">
-            <i class="bi bi-geo-alt"></i>
-        </div>
-
-        <div>
-            <h2>Delivery Location</h2>
-            <p>
-                Confirm where this order should be delivered. You can reuse your saved address
-                or select a new location from the map.
-            </p>
-        </div>
-    </div>
-
-    @if (empty($googleMapsApiKey))
-        <div class="warning-box">
-            Google Maps API key is missing. Please add <strong>GOOGLE_MAPS_API_KEY</strong> to your <strong>.env</strong> file.
+    @if ($hasSavedAddress)
+        <div class="saved-address-strip">
+            <span class="saved-address-icon"><i class="bi bi-house-check-fill"></i></span>
+            <span class="saved-address-copy">
+                <small>Saved address</small>
+                <strong>{{ $savedAddress }}</strong>
+            </span>
+            <button type="button" class="saved-address-button" onclick="useSavedAddress()">
+                Use saved address
+            </button>
+            <button type="button" class="change-address-button" onclick="startChoosingNewAddress()">
+                Choose another
+            </button>
         </div>
     @endif
 
-    <div class="delivery-location-layout">
-
-        <div class="address-summary-card {{ $hasSavedAddress ? 'has-address' : 'no-address' }}">
-            <div class="address-summary-icon">
-                <i class="bi {{ $hasSavedAddress ? 'bi-house-check' : 'bi-house-add' }}"></i>
-            </div>
-
-            <div class="address-summary-content">
-                <span>{{ $hasSavedAddress ? 'Saved delivery address' : 'No permanent address yet' }}</span>
-
-                <strong>
-                    {{ $hasSavedAddress ? $savedAddress : 'Choose your delivery location below.' }}
-                </strong>
-
-                <small>
-                    {{ $hasSavedAddress
-                        ? 'This saved address can be reused for faster ordering.'
-                        : 'Select a location on the map, then save it as your permanent address for faster future orders.'
-                    }}
-                </small>
-            </div>
-
-            @if ($hasSavedAddress)
-                <div class="address-summary-actions">
-                    <button type="button" class="saved-address-button" onclick="useSavedAddress()">
-                        Use Saved
-                    </button>
-
-                    <button type="button" class="change-address-button" onclick="startChoosingNewAddress()">
-                        Change
-                    </button>
-                </div>
-            @endif
+    @if (empty($googleMapsApiKey))
+        <div class="warning-box">
+            <i class="bi bi-exclamation-triangle-fill"></i>
+            Location search is unavailable. Ask the administrator to configure Google Maps.
         </div>
-
-        <div class="selected-address-card">
-            <div class="selected-address-top">
-                <div>
-                    <span>Selected for this order</span>
-                    <strong id="selectedLocationText">
-                        {{ $deliveryAddress ?: 'No delivery location selected yet.' }}
-                    </strong>
-                </div>
-
-                <button type="button" class="clear-location-button" onclick="clearSelectedLocation()">
-                    Clear
-                </button>
-            </div>
-
-            <div class="address-mode-box" id="addressModeBox">
-                <div class="address-mode-icon">
-                    <i class="bi bi-info-circle"></i>
-                </div>
-
-                <div>
-                    <strong id="addressModeTitle">
-                        {{ $hasSavedAddress ? 'Using saved delivery address' : 'Set your first delivery address' }}
-                    </strong>
-
-                    <span id="addressModeText">
-                        {{ $hasSavedAddress
-                            ? 'You can use your saved address or choose a different location for this order.'
-                            : 'Search or click the map to choose where your order should be delivered.'
-                        }}
-                    </span>
-                </div>
-            </div>
-
-            <label class="save-address-option {{ !$hasSavedAddress ? 'recommended' : '' }}" id="saveAddressOption">
-                <input
-                    type="checkbox"
-                    id="save_permanent_address"
-                    name="save_permanent_address"
-                    value="1"
-                    {{ $shouldSaveAddress ? 'checked' : '' }}
-                >
-
-                <span>
-                    <strong id="saveAddressLabel">
-                        {{ $hasSavedAddress ? 'Update my permanent address to this location' : 'Save this as my permanent address' }}
-                    </strong>
-
-                    <small id="saveAddressHelp">
-                        {{ $hasSavedAddress
-                            ? 'Only check this if this should replace your saved delivery address.'
-                            : 'Recommended: your next order will automatically use this location.'
-                        }}
-                    </small>
-                </span>
-            </label>
-        </div>
-    </div>
+    @endif
 
     <div class="map-search-row">
-        <div class="search-input-wrap full">
+        <label class="search-input-wrap full" for="delivery_search">
             <i class="bi bi-search"></i>
-
             <input
-                type="text"
+                type="search"
                 id="delivery_search"
                 value="{{ $deliveryAddress }}"
-                placeholder="Search delivery location..."
+                placeholder="Search for the delivery address"
+                autocomplete="street-address"
             >
-        </div>
-
+        </label>
         <button type="button" class="map-search-button" onclick="searchDeliveryAddress()">
-            Search
+            Find address
         </button>
     </div>
 
     <div class="location-picker-card">
         <div class="location-picker-helper">
-            <i class="bi bi-cursor"></i>
-            <span>Tip: Search an address or click directly on the map to move the delivery pin.</span>
+            <i class="bi bi-cursor-fill"></i>
+            <span>Search above or tap the map to place the delivery pin.</span>
         </div>
-
         <div id="deliveryMap"></div>
+    </div>
+
+    <label class="save-address-option {{ ! $hasSavedAddress ? 'recommended' : '' }}" id="saveAddressOption">
+        <input
+            type="checkbox"
+            id="save_permanent_address"
+            name="save_permanent_address"
+            value="1"
+            {{ $shouldSaveAddress ? 'checked' : '' }}
+        >
+        <span>
+            <strong id="saveAddressLabel">
+                {{ $hasSavedAddress ? 'Make this my new saved address' : 'Save this address for next time' }}
+            </strong>
+            <small id="saveAddressHelp">
+                {{ $hasSavedAddress ? 'Leave unchecked for a one-time destination.' : 'You can change it on a future order.' }}
+            </small>
+        </span>
+    </label>
+
+    <div id="addressModeBox" hidden>
+        <strong id="addressModeTitle"></strong>
+        <span id="addressModeText"></span>
     </div>
 
     <input type="hidden" id="delivery_address" name="delivery_address" value="{{ $deliveryAddress }}">
@@ -330,76 +247,69 @@
     @error('delivery_address')
         <small class="error-text">{{ $message }}</small>
     @enderror
-
     @error('delivery_lat')
         <small class="error-text">{{ $message }}</small>
     @enderror
-
     @error('delivery_lng')
         <small class="error-text">{{ $message }}</small>
     @enderror
+    <small id="deliveryLocationClientError" class="error-text" hidden>
+        Choose a delivery address before submitting the request.
+    </small>
 </section>
 
-{{-- NOTES --}}
-<section class="form-section-card">
-    <div class="section-header">
-        <div class="section-icon">
-            <i class="bi bi-journal-text"></i>
+<section class="form-section-card order-step-card">
+    <header class="section-header order-step-header">
+        <span class="order-step-number" aria-hidden="true">3</span>
+        <div class="order-step-copy">
+            <h2>Anything else?</h2>
+            <p>Add a short instruction only if the delivery team needs it.</p>
         </div>
-
-        <div>
-            <h2>Handling Notes</h2>
-            <p>Add instructions for delivery, receiving, or storage.</p>
-        </div>
-    </div>
+    </header>
 
     <div class="form-group">
-        <label for="notes">Notes</label>
-
+        <label for="notes">Delivery instructions <span class="field-optional">Optional</span></label>
         <textarea
             id="notes"
             name="notes"
-            rows="4"
-            placeholder="Example: Deliver before noon, call before arrival, keep frozen..."
+            rows="3"
+            placeholder="For example: Call before arrival or keep frozen."
         >{{ old('notes', $order?->notes) }}</textarea>
-
         @error('notes')
             <small class="error-text">{{ $message }}</small>
         @enderror
     </div>
 </section>
 
-<div class="form-actions sticky-actions">
-    <button type="submit" class="primary-button">
+<footer class="form-actions sticky-actions">
+    <span class="form-action-note">
+        <i class="bi bi-shield-check"></i>
+        You can edit or cancel the request while it is still pending.
+    </span>
+    <a href="{{ $cancelRoute }}" class="secondary-button">Cancel</a>
+    <button type="submit" class="primary-button" data-order-submit>
+        <i class="bi bi-check2-circle"></i>
         {{ $buttonText }}
     </button>
-
-    <a href="{{ $cancelRoute }}" class="secondary-button">
-        Cancel
-    </a>
-</div>
+</footer>
 
 <template id="orderItemTemplate">
     <div class="order-item-row">
         <div class="form-group product-field">
             <label>Product</label>
-
             <select data-name="product_id" required>
-                <option value="">Select product</option>
-
+                <option value="">Choose a product</option>
                 @foreach ($products as $product)
-                    <option value="{{ $product->id }}">
-                        {{ $product->name }} | {{ $product->min_temp }}°C to {{ $product->max_temp }}°C
-                    </option>
+                    <option value="{{ $product->id }}">{{ $product->name }}</option>
                 @endforeach
             </select>
         </div>
 
         <div class="form-group quantity-field">
             <label>Quantity</label>
-
             <input
                 type="number"
+                inputmode="decimal"
                 step="0.01"
                 min="0.01"
                 data-name="quantity"
@@ -410,628 +320,23 @@
 
         <div class="form-group unit-field">
             <label>Unit</label>
-
             <select data-name="unit" required>
-                <option value="kg">Kilogram</option>
-                <option value="gram">Gram</option>
+                <option value="kg">kg</option>
+                <option value="gram">gram</option>
             </select>
         </div>
 
-        <button type="button" class="remove-product-button" onclick="removeOrderItem(this)">
-            <i class="bi bi-trash"></i>
+        <button
+            type="button"
+            class="remove-product-button"
+            onclick="removeOrderItem(this)"
+            aria-label="Remove this item"
+            title="Remove item"
+        >
+            <i class="bi bi-trash3"></i>
         </button>
     </div>
 </template>
-
-@push('styles')
-<style>
-    .customer-order-page,
-    .customer-order-form {
-        display: flex;
-        flex-direction: column;
-        gap: 20px;
-    }
-
-    .customer-order-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-end;
-        gap: 24px;
-        padding: 24px;
-        border-radius: 24px;
-        background:
-            radial-gradient(circle at top left, rgba(34, 211, 238, 0.18), transparent 35%),
-            linear-gradient(135deg, #ffffff, #f8fafc);
-        border: 1px solid #e5e7eb;
-        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.07);
-    }
-
-    .eyebrow {
-        display: inline-flex;
-        background: #ecfeff;
-        color: #0891b2;
-        border: 1px solid #cffafe;
-        border-radius: 999px;
-        padding: 7px 12px;
-        font-size: 12px;
-        font-weight: 800;
-        margin-bottom: 12px;
-    }
-
-    .customer-order-header h1 {
-        margin: 0;
-        color: #0f172a;
-        font-size: 34px;
-        font-weight: 900;
-        letter-spacing: -0.05em;
-    }
-
-    .customer-order-header p {
-        margin: 8px 0 0;
-        color: #64748b;
-        line-height: 1.6;
-        max-width: 720px;
-    }
-
-    .form-section-card,
-    .sticky-actions {
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
-        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.07);
-    }
-
-    .form-section-card {
-        border-radius: 22px;
-        padding: 22px;
-    }
-
-    .section-header {
-        display: flex;
-        align-items: flex-start;
-        gap: 14px;
-        margin-bottom: 18px;
-    }
-
-    .section-icon {
-        width: 46px;
-        height: 46px;
-        border-radius: 16px;
-        background: linear-gradient(135deg, #2563eb, #06b6d4);
-        color: #ffffff;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 20px;
-        flex-shrink: 0;
-    }
-
-    .section-header h2 {
-        margin: 0;
-        color: #0f172a;
-        font-size: 19px;
-        font-weight: 900;
-    }
-
-    .section-header p {
-        margin: 5px 0 0;
-        color: #64748b;
-        font-size: 13px;
-        line-height: 1.5;
-    }
-
-    .flash-message,
-    .warning-box {
-        padding: 14px 16px;
-        border-radius: 16px;
-        font-size: 14px;
-        font-weight: 800;
-    }
-
-    .flash-message.error {
-        background: #fef2f2;
-        color: #b91c1c;
-        border: 1px solid #fecaca;
-    }
-
-    .warning-box {
-        margin-bottom: 14px;
-        background: #fffbeb;
-        color: #92400e;
-        border: 1px solid #fde68a;
-    }
-
-    .primary-button,
-    .secondary-button,
-    .add-product-button,
-    .map-search-button,
-    .saved-address-button,
-    .change-address-button,
-    .clear-location-button {
-        border: none;
-        text-decoration: none;
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        font-weight: 900;
-        transition: 0.2s ease;
-    }
-
-    .primary-button {
-        min-height: 44px;
-        padding: 0 18px;
-        border-radius: 999px;
-        background: #2563eb;
-        color: #ffffff;
-        box-shadow: 0 10px 20px rgba(37, 99, 235, 0.2);
-    }
-
-    .secondary-button {
-        min-height: 44px;
-        padding: 0 18px;
-        border-radius: 999px;
-        background: #f1f5f9;
-        color: #475569;
-    }
-
-    .order-items-card {
-        background: #f8fafc;
-        border: 1px solid #e5e7eb;
-        border-radius: 18px;
-        padding: 16px;
-    }
-
-    .order-items-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 14px;
-        margin-bottom: 14px;
-    }
-
-    .order-items-header strong {
-        display: block;
-        color: #0f172a;
-        font-size: 15px;
-        font-weight: 900;
-    }
-
-    .order-items-header span {
-        display: block;
-        color: #64748b;
-        font-size: 12px;
-        margin-top: 3px;
-    }
-
-    .order-item-row {
-        display: grid;
-        grid-template-columns: minmax(220px, 1fr) 150px 160px auto;
-        gap: 12px;
-        align-items: end;
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
-        border-radius: 16px;
-        padding: 14px;
-        margin-bottom: 12px;
-    }
-
-    .order-item-row:last-child {
-        margin-bottom: 0;
-    }
-
-    .form-group {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-    }
-
-    .form-group label {
-        color: #334155;
-        font-size: 13px;
-        font-weight: 900;
-    }
-
-    .form-group input,
-    .form-group select,
-    .form-group textarea {
-        width: 100%;
-        border: 1px solid #cbd5e1;
-        background: #ffffff;
-        color: #0f172a;
-        border-radius: 14px;
-        padding: 12px 14px;
-        outline: none;
-        transition: 0.2s ease;
-        resize: vertical;
-    }
-
-    .form-group input:focus,
-    .form-group select:focus,
-    .form-group textarea:focus,
-    .search-input-wrap input:focus {
-        border-color: #2563eb;
-        box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
-    }
-
-    .add-product-button {
-        border-radius: 999px;
-        padding: 10px 14px;
-        background: #2563eb;
-        color: #ffffff;
-        font-size: 13px;
-        gap: 7px;
-    }
-
-    .remove-product-button {
-        width: 44px;
-        height: 44px;
-        border: none;
-        border-radius: 14px;
-        background: #fef2f2;
-        color: #dc2626;
-        cursor: pointer;
-        font-size: 16px;
-    }
-
-    .delivery-location-layout {
-        display: grid;
-        grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-        gap: 16px;
-        margin-bottom: 16px;
-    }
-
-    .address-summary-card,
-    .selected-address-card {
-        border-radius: 20px;
-        border: 1px solid #e5e7eb;
-        padding: 18px;
-        min-width: 0;
-    }
-
-    .address-summary-card {
-        display: grid;
-        grid-template-columns: auto minmax(0, 1fr);
-        gap: 14px;
-        align-items: flex-start;
-        background: #f8fafc;
-    }
-
-    .address-summary-card.has-address {
-        background:
-            radial-gradient(circle at top left, rgba(37, 99, 235, 0.14), transparent 32%),
-            linear-gradient(135deg, #eff6ff, #ecfeff);
-        border-color: #bfdbfe;
-    }
-
-    .address-summary-card.no-address {
-        border-style: dashed;
-    }
-
-    .address-summary-icon {
-        width: 48px;
-        height: 48px;
-        border-radius: 16px;
-        background: #ffffff;
-        color: #2563eb;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 22px;
-        box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
-    }
-
-    .address-summary-content span,
-    .selected-address-top span {
-        display: block;
-        color: #2563eb;
-        font-size: 12px;
-        font-weight: 900;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        margin-bottom: 6px;
-    }
-
-    .address-summary-content strong,
-    .selected-address-top strong {
-        display: block;
-        color: #0f172a;
-        font-size: 15px;
-        font-weight: 900;
-        line-height: 1.45;
-        word-break: break-word;
-    }
-
-    .address-summary-content small {
-        display: block;
-        color: #64748b;
-        font-size: 12px;
-        margin-top: 6px;
-        line-height: 1.5;
-    }
-
-    .address-summary-actions {
-        grid-column: 1 / -1;
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-    }
-
-    .saved-address-button,
-    .change-address-button,
-    .clear-location-button {
-        min-height: 38px;
-        padding: 0 14px;
-        border-radius: 999px;
-        font-size: 13px;
-        white-space: nowrap;
-    }
-
-    .saved-address-button {
-        background: #2563eb;
-        color: #ffffff;
-    }
-
-    .change-address-button,
-    .clear-location-button {
-        background: #ffffff;
-        color: #475569;
-        border: 1px solid #e2e8f0;
-    }
-
-    .selected-address-card {
-        background: #ffffff;
-    }
-
-    .selected-address-top {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 14px;
-        margin-bottom: 14px;
-    }
-
-    .address-mode-box {
-        display: flex;
-        align-items: flex-start;
-        gap: 12px;
-        padding: 14px;
-        border-radius: 16px;
-        background: #f8fafc;
-        border: 1px solid #e5e7eb;
-        margin-bottom: 14px;
-    }
-
-    .address-mode-icon {
-        width: 36px;
-        height: 36px;
-        border-radius: 12px;
-        background: #eff6ff;
-        color: #2563eb;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex-shrink: 0;
-    }
-
-    .address-mode-box strong {
-        display: block;
-        color: #0f172a;
-        font-size: 14px;
-        font-weight: 900;
-        margin-bottom: 4px;
-    }
-
-    .address-mode-box span {
-        display: block;
-        color: #64748b;
-        font-size: 13px;
-        line-height: 1.5;
-    }
-
-    .address-mode-box.new-address {
-        background: #fffbeb;
-        border-color: #fde68a;
-    }
-
-    .save-address-option {
-        display: flex;
-        align-items: flex-start;
-        gap: 12px;
-        padding: 15px;
-        border-radius: 18px;
-        border: 1px solid #e5e7eb;
-        background: #ffffff;
-        cursor: pointer;
-    }
-
-    .save-address-option input {
-        width: 19px;
-        height: 19px;
-        margin-top: 2px;
-        accent-color: #2563eb;
-        flex-shrink: 0;
-    }
-
-    .save-address-option span {
-        color: #0f172a;
-        font-size: 14px;
-        font-weight: 900;
-    }
-
-    .save-address-option small {
-        display: block;
-        margin-top: 4px;
-        color: #64748b;
-        font-size: 12px;
-        font-weight: 700;
-        line-height: 1.5;
-    }
-
-    .save-address-option.recommended {
-        border-color: #bfdbfe;
-        background: #eff6ff;
-    }
-
-    .map-search-row {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        gap: 10px;
-        margin-bottom: 14px;
-    }
-
-    .search-input-wrap {
-        position: relative;
-    }
-
-    .search-input-wrap i {
-        position: absolute;
-        top: 50%;
-        left: 13px;
-        transform: translateY(-50%);
-        color: #94a3b8;
-        font-size: 14px;
-        pointer-events: none;
-    }
-
-    .search-input-wrap input {
-        width: 100%;
-        height: 44px;
-        border: 1px solid #e2e8f0;
-        background: #f8fafc;
-        border-radius: 999px;
-        padding: 0 15px 0 38px;
-        color: #0f172a;
-        font-size: 14px;
-        outline: none;
-    }
-
-    .map-search-button {
-        min-height: 44px;
-        border-radius: 14px;
-        padding: 0 18px;
-        background: #2563eb;
-        color: #ffffff;
-    }
-
-    .location-picker-card {
-        border: 1px solid #e5e7eb;
-        border-radius: 20px;
-        overflow: hidden;
-        background: #ffffff;
-    }
-
-    .location-picker-helper {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 12px 16px;
-        border-bottom: 1px solid #e5e7eb;
-        background: #f8fafc;
-        color: #64748b;
-        font-size: 13px;
-        font-weight: 700;
-    }
-
-    .location-picker-helper i {
-        color: #2563eb;
-    }
-
-    #deliveryMap {
-        width: 100%;
-        height: 430px;
-    }
-
-    .delivery-marker {
-        width: 44px;
-        height: 44px;
-        border-radius: 999px;
-        background: linear-gradient(135deg, #2563eb, #06b6d4);
-        color: #ffffff;
-        border: 3px solid #ffffff;
-        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.28);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 20px;
-    }
-
-    .error-text {
-        color: #dc2626;
-        font-size: 12px;
-        font-weight: 800;
-        margin-top: 8px;
-        display: block;
-    }
-
-    .form-actions {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-    }
-
-    .sticky-actions {
-        border-radius: 18px;
-        padding: 14px;
-    }
-
-    @media (max-width: 1100px) {
-        .delivery-location-layout {
-            grid-template-columns: 1fr;
-        }
-    }
-
-    @media (max-width: 900px) {
-        .order-item-row,
-        .map-search-row {
-            grid-template-columns: 1fr;
-        }
-
-        .order-items-header,
-        .customer-order-header,
-        .selected-address-top {
-            align-items: stretch;
-            flex-direction: column;
-        }
-
-        .add-product-button,
-        .map-search-button,
-        .remove-product-button,
-        .customer-order-header .secondary-button,
-        .saved-address-button,
-        .change-address-button,
-        .clear-location-button {
-            width: 100%;
-        }
-
-        .remove-product-button {
-            height: 44px;
-        }
-
-        .address-summary-actions {
-            flex-direction: column;
-        }
-    }
-
-    @media (max-width: 760px) {
-        .customer-order-header {
-            padding: 20px;
-        }
-
-        .customer-order-header h1 {
-            font-size: 28px;
-        }
-
-        .form-section-card {
-            padding: 16px;
-            border-radius: 20px;
-        }
-
-        #deliveryMap {
-            height: 360px;
-        }
-    }
-</style>
-@endpush
 
 @push('scripts')
 <script>
@@ -1142,8 +447,6 @@
             setNewAddressMode();
         });
 
-        attachCustomerOrderFormValidation();
-
         if (hasExistingLocation && hasSavedAddress) {
             setSavedAddressMode();
         }
@@ -1196,6 +499,8 @@
         document.getElementById('delivery_address').value = address;
         document.getElementById('delivery_search').value = address;
         document.getElementById('selectedLocationText').innerText = address;
+        document.getElementById('clearLocationButton')?.removeAttribute('hidden');
+        document.getElementById('deliveryLocationClientError')?.setAttribute('hidden', 'hidden');
     }
 
     function reverseGeocodeDeliveryLocation(position) {
@@ -1277,6 +582,7 @@
         document.getElementById('delivery_lng').value = '';
         document.getElementById('delivery_search').value = '';
         document.getElementById('selectedLocationText').innerText = 'No delivery location selected yet.';
+        document.getElementById('clearLocationButton')?.setAttribute('hidden', 'hidden');
 
         if (deliveryMarker) {
             deliveryMarker.map = null;
@@ -1371,21 +677,44 @@
     function attachCustomerOrderFormValidation() {
         const form = document.querySelector('.customer-order-form');
 
-        if (!form) {
+        if (!form || form.dataset.orderValidationReady === '1') {
             return;
         }
+
+        form.dataset.orderValidationReady = '1';
 
         form.addEventListener('submit', function (event) {
             const address = document.getElementById('delivery_address').value;
             const lat = document.getElementById('delivery_lat').value;
             const lng = document.getElementById('delivery_lng').value;
+            const locationError = document.getElementById('deliveryLocationClientError');
 
             if (!address || !lat || !lng) {
                 event.preventDefault();
-                alert('Please select a delivery location on the map before submitting your order.');
+                locationError?.removeAttribute('hidden');
+                document.getElementById('delivery_search')?.focus();
+                return;
+            }
+
+            const submitButton = form.querySelector('[data-order-submit]');
+
+            if (submitButton) {
+                submitButton.disabled = true;
+                submitButton.innerHTML = '<span class="button-spinner" aria-hidden="true"></span>Submitting…';
             }
         });
     }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        attachCustomerOrderFormValidation();
+
+        document.getElementById('delivery_search')?.addEventListener('keydown', function (event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                searchDeliveryAddress();
+            }
+        });
+    });
 </script>
 
 @if (!empty($googleMapsApiKey))

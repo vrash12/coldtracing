@@ -5,10 +5,10 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Services\ColdChain\TelemetryProcessingService;
+use App\Services\ColdChain\TelemetryIngestionService;
+use App\Services\ColdChain\TemperatureStatusService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Throwable;
 
@@ -16,50 +16,13 @@ class TelemetryController extends Controller
 {
     public function store(
         Request $request,
-        TelemetryProcessingService $telemetryProcessor
+        TelemetryIngestionService $ingestion,
+        TemperatureStatusService $temperatureStatus
     ): JsonResponse {
-        $validated = $request->validate([
-            'device_code' => [
-                'required',
-                'string',
-                'max:255',
-                Rule::in(array_keys(config('coldtrace.devices', []))),
-            ],
-
-            'latitude' => [
-                'nullable',
-                'numeric',
-                'between:-90,90',
-            ],
-
-            'longitude' => [
-                'nullable',
-                'numeric',
-                'between:-180,180',
-            ],
-
-            'temperature' => [
-                'required',
-                'numeric',
-                'between:-100,100',
-            ],
-
-            'humidity' => [
-                'nullable',
-                'numeric',
-                'between:0,100',
-            ],
-
-            'recorded_at' => [
-                'nullable',
-                'date',
-            ],
-        ]);
+        $this->authorizeTelemetryDevice($request);
 
         try {
-            $telemetryLog = $telemetryProcessor->process(
-                $validated
-            );
+            $telemetryLog = $ingestion->ingest($request->all());
         } catch (ValidationException $exception) {
             throw $exception;
         } catch (Throwable $exception) {
@@ -70,6 +33,11 @@ class TelemetryController extends Controller
                 'message' => $exception->getMessage(),
             ], 422);
         }
+
+        $temperatureState = $temperatureStatus->evaluate(
+            $telemetryLog->temperature,
+            $telemetryLog->trip?->product
+        );
 
         return response()->json([
             'success' => true,
@@ -85,8 +53,38 @@ class TelemetryController extends Controller
                 'longitude' => $telemetryLog->longitude,
                 'mkt_value' => $telemetryLog->mkt_value,
                 'rsl_hours' => $telemetryLog->rsl_hours,
+                'temperature_status' => $temperatureState['label'],
+                'temperature_status_code' => $temperatureState['code'],
                 'recorded_at' => $telemetryLog->recorded_at,
             ],
         ], 201);
+    }
+
+    private function authorizeTelemetryDevice(Request $request): void
+    {
+        $expectedToken = (string) config(
+            'coldtrace.telemetry.token',
+            ''
+        );
+
+        /*
+         * Existing local installations remain compatible when no token has
+         * been configured. Production deployments should always set one.
+         */
+        if ($expectedToken === '') {
+            return;
+        }
+
+        $providedToken = (string) $request->header(
+            'X-ColdTrace-Token',
+            ''
+        );
+
+        if (
+            $providedToken === ''
+            || ! hash_equals($expectedToken, $providedToken)
+        ) {
+            abort(401, 'Invalid ColdTrace telemetry device token.');
+        }
     }
 }

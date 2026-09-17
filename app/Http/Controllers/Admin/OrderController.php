@@ -383,6 +383,23 @@ class OrderController extends Controller
             'items.*.unit' => ['required', Rule::in(['kg', 'gram'])],
 
             'notes' => ['nullable', 'string'],
+        ], [
+            'items.required' => 'Add at least one item to the order.',
+            'items.*.product_id.required' => 'Choose a product for every item.',
+            'items.*.quantity.required' => 'Enter a quantity for every item.',
+            'items.*.quantity.min' => 'Each quantity must be greater than zero.',
+            'delivery_address.required' => 'Choose a delivery destination using the search or map.',
+            'delivery_lat.required' => 'Confirm the delivery pin on the map.',
+            'delivery_lng.required' => 'Confirm the delivery pin on the map.',
+            'expected_delivery_at.required_with' => 'Choose a delivery date and time before assigning a driver.',
+            'expected_delivery_at.date' => 'Enter a valid delivery date and time.',
+        ], [
+            'receiver_id' => 'customer',
+            'driver_id' => 'driver',
+            'items.*.product_id' => 'product',
+            'items.*.quantity' => 'quantity',
+            'items.*.unit' => 'unit',
+            'expected_delivery_at' => 'delivery time',
         ]);
 
         $validator->after(function ($validator) use ($request, $order) {
@@ -400,10 +417,10 @@ class OrderController extends Controller
                     'driver_id',
                     'The selected driver does not have an assigned truck.'
                 );
-            } elseif ($driver->assignedTruck->status === 'maintenance') {
+            } elseif (in_array($driver->assignedTruck->status, ['maintenance', 'inactive'], true)) {
                 $validator->errors()->add(
                     'driver_id',
-                    'The selected driver\'s truck is currently under maintenance.'
+                    'The selected driver\'s truck is under maintenance or inactive.'
                 );
             }
 

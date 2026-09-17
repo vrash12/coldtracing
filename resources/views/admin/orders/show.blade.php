@@ -1,125 +1,135 @@
 @extends('layouts.app')
 
-@section('title', 'Order Details')
+@section('title', 'Order ' . $order->order_code)
 
 @section('content')
+@php
+    $canEdit = ! in_array($order->status, ['in_transit', 'delivered', 'cancelled'], true)
+        && ! in_array($order->trip?->status, ['in_progress', 'completed', 'cancelled'], true);
+@endphp
 
-<div class="orders-page">
-
-    <div class="page-toolbar">
+<div class="ct-index order-detail-page admin-order-detail-page">
+    <header class="ct-index-header order-detail-header">
         <div>
-            <h1>Order Details</h1>
+            <small>Order management</small>
+            <div class="order-title-row">
+                <h1>{{ $order->order_code }}</h1>
+                <x-dashboard.status-badge :status="$order->status" />
+            </div>
+            <p>
+                {{ $order->driver
+                    ? 'Assigned to ' . $order->driver->name . '.'
+                    : 'This order is waiting for a driver assignment.'
+                }}
+            </p>
         </div>
 
-        <div class="header-actions">
-            <a href="{{ route('orders.edit', $order) }}" class="primary-button">
-                Edit Order
+        <div class="ct-index-actions">
+            <a href="{{ route('orders.index') }}" class="ct-button ct-button-light">
+                <i class="bi bi-arrow-left"></i>Orders
             </a>
-
-            <a href="{{ route('orders.index') }}" class="secondary-button">
-                Back to Orders
-            </a>
+            @if ($order->trip)
+                <a href="{{ route('monitoring.index') }}" class="ct-button ct-button-light">
+                    <i class="bi bi-map-fill"></i>Live monitoring
+                </a>
+            @endif
+            @if ($canEdit)
+                <a href="{{ route('orders.edit', $order) }}" class="ct-button ct-button-dark">
+                    <i class="bi {{ $order->driver ? 'bi-pencil-fill' : 'bi-person-plus-fill' }}"></i>
+                    {{ $order->driver ? 'Edit order' : 'Assign driver' }}
+                </a>
+            @endif
         </div>
-    </div>
+    </header>
 
     @if (session('success'))
-        <div class="flash-message success">
-            {{ session('success') }}
-        </div>
+        <div class="ct-flash ct-flash-success" role="status"><i class="bi bi-check-circle-fill"></i>{{ session('success') }}</div>
     @endif
-
     @if (session('error'))
-        <div class="flash-message error">
-            {{ session('error') }}
-        </div>
+        <div class="ct-flash ct-flash-error" role="alert"><i class="bi bi-exclamation-circle-fill"></i>{{ session('error') }}</div>
     @endif
 
-    <div class="details-panel">
-        <div class="order-profile">
-            <div class="order-icon">
-                <i class="bi bi-bag-check"></i>
+    @if (! $order->driver && $canEdit)
+        <a href="{{ route('orders.edit', $order) }}" class="dispatch-callout">
+            <span><i class="bi bi-person-plus-fill"></i></span>
+            <span><strong>Driver assignment needed</strong><small>Choose an available driver and delivery time to create the pending trip.</small></span>
+            <i class="bi bi-arrow-right"></i>
+        </a>
+    @endif
+
+    <div class="order-detail-grid">
+        <section class="ct-panel">
+            <header class="ct-panel-header">
+                <div class="ct-panel-heading">
+                    <span class="ct-panel-icon cyan"><i class="bi bi-box-seam-fill"></i></span>
+                    <div class="ct-panel-title"><small>Cargo</small><h2>Order items</h2></div>
+                </div>
+            </header>
+            <div class="ct-panel-body">
+                <div class="order-product-list">
+                    @forelse ($order->orderItems as $item)
+                        <div class="order-product-row">
+                            <span>
+                                <strong>{{ $item->product?->name ?? 'Product unavailable' }}</strong>
+                                @if ($item->product)
+                                    <small>Safe range {{ $item->product->min_temp }}°C–{{ $item->product->max_temp }}°C</small>
+                                @endif
+                            </span>
+                            <em>{{ $item->quantity }} {{ $item->unit }}</em>
+                        </div>
+                    @empty
+                        <x-dashboard.empty-state icon="bi-box" title="No items listed" message="This order has no product details." />
+                    @endforelse
+                </div>
             </div>
+        </section>
 
-            <div>
-                <h2>{{ $order->order_code }}</h2>
-
-                <p>
-                    {{ $order->orderItems->count() }} product(s) in this order
-                </p>
-
-                <span class="status-badge status-{{ $order->status }}">
-                    {{ ucfirst(str_replace('_', ' ', $order->status)) }}
-                </span>
+        <section class="ct-panel">
+            <header class="ct-panel-header">
+                <div class="ct-panel-heading">
+                    <span class="ct-panel-icon"><i class="bi bi-truck-front-fill"></i></span>
+                    <div class="ct-panel-title"><small>Dispatch</small><h2>Delivery details</h2></div>
+                </div>
+            </header>
+            <div class="ct-panel-body">
+                <dl class="order-facts">
+                    <div>
+                        <dt>Customer</dt>
+                        <dd>{{ $order->receiver?->name ?? 'No customer selected' }}</dd>
+                        @if ($order->receiver?->phone || $order->receiver?->email)
+                            <small>{{ $order->receiver?->phone ?? $order->receiver?->email }}</small>
+                        @endif
+                    </div>
+                    <div>
+                        <dt>Driver</dt>
+                        <dd>{{ $order->driver?->name ?? 'Not assigned' }}</dd>
+                        @if ($order->trip?->truck)
+                            <small>{{ $order->trip->truck->plate_number }}</small>
+                        @endif
+                    </div>
+                    <div>
+                        <dt>Delivery time</dt>
+                        <dd>{{ $order->expected_delivery_at?->format('M d, Y · h:i A') ?? 'Not scheduled' }}</dd>
+                    </div>
+                    <div>
+                        <dt>Destination</dt>
+                        <dd>{{ $order->delivery_address }}</dd>
+                    </div>
+                    <div>
+                        <dt>Created by</dt>
+                        <dd>{{ $order->creator?->name ?? 'Unknown' }}</dd>
+                        <small>{{ $order->created_at?->format('M d, Y · h:i A') }}</small>
+                    </div>
+                </dl>
             </div>
-        </div>
-
-        <div class="details-grid">
-
-            <div class="detail-card">
-                <span>Customer / Receiver</span>
-                <strong>{{ $order->receiver?->name ?? 'N/A' }}</strong>
-                <small>{{ $order->receiver?->email ?? 'N/A' }}</small>
-            </div>
-
-            <div class="detail-card">
-                <span>Assigned Driver</span>
-                <strong>{{ $order->driver?->name ?? 'No driver assigned' }}</strong>
-                <small>{{ $order->driver?->email ?? 'N/A' }}</small>
-            </div>
-
-            <div class="detail-card">
-                <span>Created By</span>
-                <strong>{{ $order->creator?->name ?? 'N/A' }}</strong>
-                <small>{{ $order->created_at?->format('M d, Y h:i A') ?? 'N/A' }}</small>
-            </div>
-
-            <div class="detail-card">
-                <span>Expected Delivery</span>
-                <strong>{{ $order->expected_delivery_at?->format('M d, Y h:i A') ?? 'Not set' }}</strong>
-            </div>
-
-            <div class="detail-card full-width">
-                <span>Delivery Address</span>
-                <strong>{{ $order->delivery_address }}</strong>
-                <small>
-                    {{ $order->delivery_lat ?? 'No latitude' }},
-                    {{ $order->delivery_lng ?? 'No longitude' }}
-                </small>
-            </div>
-
-            <div class="detail-card full-width">
-                <span>Products</span>
-
-                @forelse ($order->orderItems as $item)
-                    <strong>
-                        {{ $item->product?->name ?? 'N/A' }} - {{ $item->quantity }} {{ $item->unit }}
-                    </strong>
-
-                    @if ($item->product)
-                        <small>
-                            Safe range:
-                            {{ $item->product->min_temp ?? 'N/A' }}°C
-                            to
-                            {{ $item->product->max_temp ?? 'N/A' }}°C
-                        </small>
-                    @endif
-                @empty
-                    <strong>No products listed</strong>
-                @endforelse
-            </div>
-
-            <div class="detail-card full-width">
-                <span>Notes</span>
-                <strong>{{ $order->notes ?: 'No notes' }}</strong>
-            </div>
-
-        </div>
+        </section>
     </div>
 
+    @if ($order->notes)
+        <section class="ct-panel order-notes-panel">
+            <span class="ct-panel-icon amber"><i class="bi bi-journal-text"></i></span>
+            <div><small>Handling instructions</small><p>{{ $order->notes }}</p></div>
+        </section>
+    @endif
 </div>
-
 @endsection
-
-@push('styles')
-@include('admin.orders.partials.styles')
-@endpush

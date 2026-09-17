@@ -174,13 +174,10 @@ final class RemainingShelfLifeService
      * - min_temp
      * - max_temp
      *
-     * Optional recommended Product fields:
+     * Required scientific Product fields:
      *
      * - reference_storage_temp_celsius
      * - activation_energy_j_per_mol
-     *
-     * When reference_storage_temp_celsius is unavailable,
-     * the midpoint between min_temp and max_temp is used.
      *
      * @return array<string, float|string|bool>
      */
@@ -198,7 +195,7 @@ final class RemainingShelfLifeService
 
         if (
             $initialShelfLife === null
-            || !is_numeric($initialShelfLife)
+            || ! is_numeric($initialShelfLife)
         ) {
             throw new InvalidArgumentException(
                 'The product does not have a valid initial_shelf_life_hours value.'
@@ -220,39 +217,9 @@ final class RemainingShelfLifeService
                 $referenceSource =
                     'product.reference_storage_temp_celsius';
             } else {
-                $minimumTemperature = data_get(
-                    $product,
-                    'min_temp'
+                throw new InvalidArgumentException(
+                    'The product requires a validated reference_storage_temp_celsius value before remaining shelf life can be estimated.'
                 );
-
-                $maximumTemperature = data_get(
-                    $product,
-                    'max_temp'
-                );
-
-                if (
-                    !is_numeric($minimumTemperature)
-                    || !is_numeric($maximumTemperature)
-                ) {
-                    throw new InvalidArgumentException(
-                        'The product must have valid min_temp and max_temp values when no reference temperature is provided.'
-                    );
-                }
-
-                /*
-                 * This midpoint is a fallback assumption.
-                 * A validated product reference-storage temperature
-                 * is more scientifically appropriate.
-                 */
-                $referenceTemperatureCelsius =
-                    (
-                        (float) $minimumTemperature
-                        +
-                        (float) $maximumTemperature
-                    ) / 2;
-
-                $referenceSource =
-                    'safe_temperature_range_midpoint';
             }
         }
 
@@ -271,11 +238,9 @@ final class RemainingShelfLifeService
                 $activationEnergySource =
                     'product.activation_energy_j_per_mol';
             } else {
-                $activationEnergyJPerMol =
-                    MktCalculatorService::DEFAULT_ACTIVATION_ENERGY_J_PER_MOL;
-
-                $activationEnergySource =
-                    'default_83144_j_per_mol';
+                throw new InvalidArgumentException(
+                    'The product requires a validated activation_energy_j_per_mol value before remaining shelf life can be estimated.'
+                );
             }
         }
 
@@ -283,10 +248,8 @@ final class RemainingShelfLifeService
             initialShelfLifeHours: (float) $initialShelfLife,
             elapsedHours: $elapsedHours,
             mktCelsius: $mktCelsius,
-            referenceTemperatureCelsius:
-                $referenceTemperatureCelsius,
-            activationEnergyJPerMol:
-                $activationEnergyJPerMol
+            referenceTemperatureCelsius: $referenceTemperatureCelsius,
+            activationEnergyJPerMol: $activationEnergyJPerMol
         );
 
         $result['reference_temperature_source'] =
@@ -296,6 +259,60 @@ final class RemainingShelfLifeService
             $activationEnergySource;
 
         return $result;
+    }
+
+    /**
+     * Return missing or invalid scientific inputs for product-based RSL.
+     *
+     * @return list<string>
+     */
+    public function productProfileIssues(Product $product): array
+    {
+        $issues = [];
+
+        $initialShelfLife = data_get(
+            $product,
+            'initial_shelf_life_hours'
+        );
+
+        if (
+            ! is_numeric($initialShelfLife)
+            || ! is_finite((float) $initialShelfLife)
+            || (float) $initialShelfLife <= 0
+        ) {
+            $issues[] =
+                'initial_shelf_life_hours must be greater than zero';
+        }
+
+        $referenceTemperature = data_get(
+            $product,
+            'reference_storage_temp_celsius'
+        );
+
+        if (
+            ! is_numeric($referenceTemperature)
+            || ! is_finite((float) $referenceTemperature)
+            || (float) $referenceTemperature <= -273.15
+        ) {
+            $issues[] =
+                'reference_storage_temp_celsius must be above absolute zero';
+        }
+
+        $activationEnergy = data_get(
+            $product,
+            'activation_energy_j_per_mol'
+        );
+
+        if (
+            ! is_numeric($activationEnergy)
+            || ! is_finite((float) $activationEnergy)
+            || (float) $activationEnergy <= 0
+        ) {
+            $issues[] =
+                'activation_energy_j_per_mol must be greater than zero';
+        }
+
+        return $issues;
     }
 
     private function resolveStatus(
