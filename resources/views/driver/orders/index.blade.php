@@ -28,7 +28,7 @@
         </div>
 
         <div class="ct-index-actions header-actions">
-            <button type="button" class="ct-button ct-button-dark primary-button" onclick="optimizeDriverOrdersRoute(true)">
+            <button type="button" class="ct-button ct-button-dark primary-button" data-optimize-orders onclick="optimizeDriverOrdersRoute(true)">
                 <i class="bi bi-signpost-split"></i>
                 Optimize Route
             </button>
@@ -95,8 +95,7 @@
 
         @if (empty($googleMapsApiKey))
             <div class="warning-box">
-                Google Maps API key is missing. Add <strong>GOOGLE_MAPS_API_KEY</strong> to your <strong>.env</strong> file.
-                ColdTrace can still create an approximate stop order, but the map and traffic-aware route will not load.
+                The map is not configured. Ask your administrator to set up Google Maps for this system.
             </div>
         @endif
 
@@ -107,7 +106,7 @@
         @endif
 
         <div class="route-action-row">
-            <button type="button" class="primary-button" onclick="optimizeDriverOrdersRoute(true)">
+            <button type="button" class="primary-button" data-optimize-orders onclick="optimizeDriverOrdersRoute(true)">
                 <i class="bi bi-magic"></i>
                 Optimize All Orders
             </button>
@@ -130,7 +129,7 @@
                 id="openOptimizedMapsButton"
             >
                 <i class="bi bi-map"></i>
-                Open Google Maps
+                <span data-maps-label>Open Google Maps</span>
             </a>        </div>
 
         <div class="route-message" id="routeMessage">
@@ -354,7 +353,7 @@
     </section>
 
     <nav class="mobile-driver-action-bar" aria-label="Mobile driver route actions">
-        <button type="button" onclick="optimizeDriverOrdersRoute(true)">
+        <button type="button" data-optimize-orders onclick="optimizeDriverOrdersRoute(true)">
             <i class="bi bi-magic"></i>
             Optimize
         </button>
@@ -366,7 +365,7 @@
 
         <a href="#" target="_blank" rel="noopener" id="mobileOpenMapsButton" class="disabled-link">
             <i class="bi bi-map"></i>
-            Maps
+            <span data-maps-label>Maps</span>
         </a>
     </nav>
 </div>
@@ -378,12 +377,10 @@
 <script>
     const deliveryStops = @json($routeStops->values());
     const initialCurrentPosition = @json(($hasCurrentGps ?? false) ? ['lat' => (float) $currentLat, 'lng' => (float) $currentLng] : null);
-    const googleApiKey = @json($googleMapsApiKey ?? '');
+    const routeOptimizationUrl = @json(route('driver.orders.optimize'));
     const softwareTelemetryUrl = @json(route('driver.telemetry.software-feed'));
     const csrfToken = @json(csrf_token());
 
-    const MAX_EXHAUSTIVE_ROUTE_STOPS = 10;
-    const MAX_ROUTES_API_STOPS = 25;
     const BROWSER_GPS_MAX_ACCURACY_METERS = 200;
 
     let driverOrdersRouteMap = null;
@@ -395,6 +392,8 @@
     let currentGpsRecordedAt = ColdTraceLocation.time(@json($gpsRecordedAt ?? null));
     let currentGpsSource = @json($gpsSource ?? null);
     let locationGeneration = 0;
+    let optimizationRequestVersion = 0;
+    let optimizationController = null;
 
     function expireDriverLocation(force = false) {
         if (!force && ColdTraceLocation.fresh(currentGpsRecordedAt)) return;
@@ -403,10 +402,8 @@
         currentTruckMarker && (currentTruckMarker.map = null);
         currentTruckMarker = null;
         locationGeneration++;
-        routePolyline?.setMap(null);
-        routePolyline = null;
-        routeHasBeenOptimized = false;
-        lastRouteResult = null;
+        cancelRouteOptimization();
+        clearOptimizedRoute();
         document.getElementById('optimizedDistance').innerText = '—';
         document.getElementById('optimizedDuration').innerText = '—';
         document.getElementById('optimizedDistanceHelp').innerText = 'Waiting for live GPS.';
@@ -421,6 +418,7 @@
     const driverLocationTimer = setInterval(expireDriverLocation, 1000);
     document.addEventListener('visibilitychange', () => expireDriverLocation());
     window.addEventListener('pagehide', () => {
+        cancelRouteOptimization();
         clearInterval(driverLocationTimer);
         if (softwareTelemetryTimer !== null) clearInterval(softwareTelemetryTimer);
         if (liveLocationWatchId !== null) navigator.geolocation?.clearWatch(liveLocationWatchId);
@@ -437,7 +435,7 @@
         renderStopList(optimizedStops, {
             title: deliveryStops.length ? 'Waiting for optimization' : 'No stops available',
             subtitle: deliveryStops.length
-                ? 'Press Optimize All Orders to calculate the shortest route.'
+                ? 'Press Optimize All Orders to compare road routes and get a recommendation.'
                 : 'No active assigned orders with coordinates are ready.'
         });
 
@@ -707,299 +705,142 @@
             : 'Simulated temperature is starting now. This browser cannot provide live location.', 'warning');
     }
 
+    function setOptimizationBusy(busy) {
+        document.querySelectorAll('[data-optimize-orders]').forEach(button => {
+            button.disabled = busy;
+            button.setAttribute('aria-busy', String(busy));
+        });
+    }
+
+    function cancelRouteOptimization() {
+        optimizationRequestVersion++;
+        optimizationController?.abort();
+        optimizationController = null;
+        setOptimizationBusy(false);
+    }
+
+    function clearOptimizedRoute() {
+        routePolyline?.setMap(null);
+        routePolyline = null;
+        routeHasBeenOptimized = false;
+        lastRouteResult = null;
+        optimizedStops = [...deliveryStops];
+        document.getElementById('optimizedDistance').innerText = '—';
+        document.getElementById('optimizedDuration').innerText = '—';
+        document.getElementById('optimizedDistanceHelp').innerText = 'No road route calculated.';
+        document.getElementById('optimizedDurationHelp').innerText = 'Waiting for a road route.';
+        updateMapsButtons(null);
+        document.querySelectorAll('.route-order-badge').forEach(badge => {
+            badge.classList.remove('active', 'next');
+            badge.innerText = 'Not optimized';
+        });
+        updateRouteNumbersOnMap(optimizedStops);
+        renderStopList(optimizedStops, {
+            title: 'Awaiting a road route',
+            subtitle: 'Delivery locations are shown below. A recommended sequence is not available yet.',
+        });
+    }
+
     async function optimizeDriverOrdersRoute(shouldFocus) {
         expireDriverLocation();
-        const generation = locationGeneration;
         if (!deliveryStops.length) {
             setRouteBadge('No stops', 'warning');
             setRouteMessage('There are no active assigned orders with delivery coordinates to optimize.', 'warning');
             return;
         }
-
         if (!latestCurrentPosition) {
             setRouteBadge('GPS needed', 'warning');
-            setRouteMessage('ColdTrace needs a recent truck position before it can calculate the route. Wait for ESP32 GPS or tap <strong>Use Device Location</strong>.', 'warning');
+            setRouteMessage('Wait for live truck GPS or start the live location feed before calculating a route.', 'warning');
             return;
         }
 
-        setRouteBadge('Optimizing...', 'warning');
-        setRouteMessage('Calculating the shortest route across all assigned delivery locations...', 'warning');
+        cancelRouteOptimization();
+        const version = optimizationRequestVersion;
+        const generation = locationGeneration;
+        const controller = new AbortController();
+        optimizationController = controller;
+        clearOptimizedRoute();
+        setOptimizationBusy(true);
+        setRouteBadge('Finding a route...', 'warning');
+        setRouteMessage('Comparing road routes and asking AI to recommend a delivery sequence using the available cargo information...', 'warning');
+        let timedOut = false;
+        const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 90000);
 
         try {
-            let result = null;
-
-            if (googleApiKey && deliveryStops.length <= MAX_EXHAUSTIVE_ROUTE_STOPS) {
-                result = await optimizeWithRoutesApiExhaustive(latestCurrentPosition, deliveryStops);
-            } else if (googleApiKey && deliveryStops.length <= MAX_ROUTES_API_STOPS) {
-                result = await optimizeWithNearestNeighborAndRoutesApi(latestCurrentPosition, deliveryStops);
+            const response = await fetch(routeOptimizationUrl, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken},
+                body: JSON.stringify({origin: {
+                    lat: Number(latestCurrentPosition.lat),
+                    lng: Number(latestCurrentPosition.lng),
+                    recorded_at: new Date(currentGpsRecordedAt).toISOString(),
+                }}),
+                signal: controller.signal,
+            });
+            const payload = await response.json().catch(() => null);
+            expireDriverLocation();
+            if (version !== optimizationRequestVersion || generation !== locationGeneration || !latestCurrentPosition) return;
+            if (!response.ok || !payload?.success) {
+                const message = response.status === 419 || response.status === 401
+                    ? 'Your session expired. Refresh the page and sign in again.'
+                    : payload?.message || 'The route service is unavailable. Please try again.';
+                throw new Error(message);
             }
-
-            if (generation !== locationGeneration || !latestCurrentPosition) return;
-            if (!result) {
-                result = buildNearestNeighborFallback(latestCurrentPosition, deliveryStops);
+            const result = payload.result;
+            if (!result?.route?.polyline?.encodedPolyline || !Array.isArray(result.orderedStops) || !result.orderedStops.length) {
+                throw new Error('No usable road route was returned. Please try again.');
             }
-
             applyOptimizedRouteResult(result, shouldFocus);
         } catch (error) {
-            if (generation !== locationGeneration || !latestCurrentPosition) return;
-            console.error('Route optimization failed:', error);
-            const fallback = buildNearestNeighborFallback(latestCurrentPosition, deliveryStops);
-            applyOptimizedRouteResult(fallback, shouldFocus);
-            setRouteMessage('Google Routes API could not complete the route, so ColdTrace used an approximate nearest-stop sequence.', 'warning');
-        }
-    }
-
-    async function optimizeWithRoutesApiExhaustive(origin, stops) {
-        let bestResult = null;
-        let bestScore = Infinity;
-
-        for (let destinationIndex = 0; destinationIndex < stops.length; destinationIndex += 1) {
-            const destinationStop = stops[destinationIndex];
-            const intermediateStops = stops.filter(function (_, index) {
-                return index !== destinationIndex;
-            });
-
-            const route = await fetchRoutesApiRoute(origin, destinationStop, intermediateStops, true);
-
-            if (!route) {
-                continue;
-            }
-
-            const optimizedIntermediateIndexes = route.optimizedIntermediateWaypointIndex ?? [];
-            const orderedIntermediates = optimizedIntermediateIndexes.length
-                ? optimizedIntermediateIndexes.map(function (index) {
-                    return intermediateStops[index];
-                })
-                : intermediateStops;
-
-            const orderedStops = [...orderedIntermediates, destinationStop];
-            const score = getRouteDurationSeconds(route) + ((route.distanceMeters ?? 0) * 0.04);
-
-            if (score < bestScore) {
-                bestScore = score;
-                bestResult = {
-                    orderedStops: orderedStops,
-                    route: route,
-                    strategy: 'traffic-aware optimized route',
-                };
+            expireDriverLocation();
+            if (version !== optimizationRequestVersion || generation !== locationGeneration || !latestCurrentPosition) return;
+            setRouteBadge('Route unavailable', 'warning');
+            const message = timedOut ? 'The route request took too long. Please try again.'
+                : error.name === 'TypeError' ? 'Could not connect to the route service. Check your connection and try again.'
+                : error.message || 'The route service is unavailable. Please try again.';
+            setRouteMessage(escapeHtml(message), 'warning');
+        } finally {
+            clearTimeout(timeout);
+            if (version === optimizationRequestVersion) {
+                optimizationController = null;
+                setOptimizationBusy(false);
             }
         }
-
-        return bestResult;
-    }
-
-    async function optimizeWithNearestNeighborAndRoutesApi(origin, stops) {
-        const orderedStops = nearestNeighborOrder(origin, stops);
-        const destinationStop = orderedStops[orderedStops.length - 1];
-        const intermediateStops = orderedStops.slice(0, -1);
-        const route = await fetchRoutesApiRoute(origin, destinationStop, intermediateStops, false);
-
-        if (!route) {
-            return null;
-        }
-
-        return {
-            orderedStops: orderedStops,
-            route: route,
-            strategy: 'nearest-stop order with traffic-aware road route',
-        };
-    }
-
-    async function fetchRoutesApiRoute(origin, destinationStop, intermediateStops, optimizeWaypointOrder) {
-        const body = {
-            origin: {
-                location: {
-                    latLng: {
-                        latitude: Number(origin.lat),
-                        longitude: Number(origin.lng),
-                    }
-                }
-            },
-            destination: {
-                location: {
-                    latLng: {
-                        latitude: Number(destinationStop.lat),
-                        longitude: Number(destinationStop.lng),
-                    }
-                }
-            },
-            intermediates: intermediateStops.map(function (stop) {
-                return {
-                    location: {
-                        latLng: {
-                            latitude: Number(stop.lat),
-                            longitude: Number(stop.lng),
-                        }
-                    }
-                };
-            }),
-            travelMode: 'DRIVE',
-            routingPreference: 'TRAFFIC_AWARE',
-            computeAlternativeRoutes: false,
-            units: 'METRIC',
-            languageCode: 'en-US',
-        };
-
-        if (optimizeWaypointOrder && intermediateStops.length > 0) {
-            body.optimizeWaypointOrder = true;
-        }
-
-        const response = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-Goog-Api-Key': googleApiKey,
-                'X-Goog-FieldMask': [
-                    'routes.distanceMeters',
-                    'routes.duration',
-                    'routes.staticDuration',
-                    'routes.polyline.encodedPolyline',
-                    'routes.localizedValues',
-                    'routes.optimizedIntermediateWaypointIndex'
-                ].join(',')
-            },
-            body: JSON.stringify(body),
-        });
-
-        const result = await response.json();
-
-        if (!response.ok || !result.routes || result.routes.length === 0) {
-            console.error('Routes API error:', result);
-            return null;
-        }
-
-        return result.routes[0];
-    }
-
-    function buildNearestNeighborFallback(origin, stops) {
-        const orderedStops = nearestNeighborOrder(origin, stops);
-        const approximateMeters = calculateApproximateRouteMeters(origin, orderedStops);
-
-        return {
-            orderedStops: orderedStops,
-            route: null,
-            approximateMeters: approximateMeters,
-            strategy: googleApiKey
-                ? 'approximate nearest-stop route'
-                : 'approximate nearest-stop route without Google Routes API',
-        };
-    }
-
-    function nearestNeighborOrder(origin, stops) {
-        const remaining = stops.map(function (stop) {
-            return { ...stop };
-        });
-
-        const ordered = [];
-        let current = {
-            lat: Number(origin.lat),
-            lng: Number(origin.lng),
-        };
-
-        while (remaining.length) {
-            let bestIndex = 0;
-            let bestDistance = Infinity;
-
-            remaining.forEach(function (stop, index) {
-                const distance = haversineMeters(current, stop);
-
-                if (distance < bestDistance) {
-                    bestDistance = distance;
-                    bestIndex = index;
-                }
-            });
-
-            const next = remaining.splice(bestIndex, 1)[0];
-            ordered.push(next);
-            current = {
-                lat: Number(next.lat),
-                lng: Number(next.lng),
-            };
-        }
-
-        return ordered;
-    }
-
-    function calculateApproximateRouteMeters(origin, stops) {
-        if (!origin || !stops.length) {
-            return 0;
-        }
-
-        let total = 0;
-        let current = origin;
-
-        stops.forEach(function (stop) {
-            total += haversineMeters(current, stop);
-            current = stop;
-        });
-
-        return total;
-    }
-
-    function haversineMeters(a, b) {
-        const radius = 6371000;
-        const lat1 = toRadians(Number(a.lat));
-        const lat2 = toRadians(Number(b.lat));
-        const deltaLat = toRadians(Number(b.lat) - Number(a.lat));
-        const deltaLng = toRadians(Number(b.lng) - Number(a.lng));
-
-        const sinLat = Math.sin(deltaLat / 2);
-        const sinLng = Math.sin(deltaLng / 2);
-
-        const value = sinLat * sinLat
-            + Math.cos(lat1) * Math.cos(lat2) * sinLng * sinLng;
-
-        return radius * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
-    }
-
-    function toRadians(value) {
-        return value * Math.PI / 180;
     }
 
     function applyOptimizedRouteResult(result, shouldFocus) {
         optimizedStops = result.orderedStops;
         routeHasBeenOptimized = true;
         lastRouteResult = result;
-
+        const recommendation = result.recommendation || {};
+        const usedAi = recommendation.decision_source === 'openai';
         renderStopList(optimizedStops, {
-            title: 'Optimized route ready',
-            subtitle: 'Strategy: ' + result.strategy,
+            title: usedAi ? 'AI recommended sequence' : 'Automatic route recommendation',
+            subtitle: result.strategy || 'Based on available road routes.',
         });
-
+        document.getElementById('routeStopsCount').innerText = String(optimizedStops.length);
         updateTableRouteBadges(optimizedStops);
         updateMapsButtons(buildGoogleMapsMultiStopUrl(optimizedStops));
         updateRouteNumbersOnMap(optimizedStops);
-
-        if (result.route) {
-            drawRoutesApiPolyline(result.route, optimizedStops, shouldFocus);
-            updateRouteStatsFromRoute(result.route, result.strategy);
-        } else {
-            drawStraightLineRoute(optimizedStops, shouldFocus);
-            updateRouteStatsFromApproximation(result.approximateMeters, result.strategy);
-        }
-    }
-
-    function updateRouteStatsFromRoute(route, strategy) {
-        const distanceText = getRouteDistanceText(route);
-        const durationText = getRouteDurationText(route);
-
-        document.getElementById('optimizedDistance').innerText = distanceText;
-        document.getElementById('optimizedDuration').innerText = durationText;
-        document.getElementById('optimizedDistanceHelp').innerText = 'Road distance from Google Routes API.';
-        document.getElementById('optimizedDurationHelp').innerText = 'Traffic-aware drive time.';
-
-        setRouteBadge('Optimized', 'success');
-        setRouteMessage('Route optimized using ' + escapeHtml(strategy) + '. Open Google Maps to start navigation.', 'success');
-    }
-
-    function updateRouteStatsFromApproximation(approximateMeters, strategy) {
-        document.getElementById('optimizedDistance').innerText = metersToText(approximateMeters);
-        document.getElementById('optimizedDuration').innerText = 'Open Maps';
-        document.getElementById('optimizedDistanceHelp').innerText = 'Approximate straight-line order. Google Maps will calculate road navigation.';
-        document.getElementById('optimizedDurationHelp').innerText = 'Drive time appears in Google Maps.';
-
-        setRouteBadge('Approximate route', 'warning');
-        setRouteMessage('ColdTrace used an approximate nearest-location sequence because a full Routes API optimization was unavailable. Open Google Maps for road navigation.', 'warning');
+        drawRoutesApiPolyline(result.route, optimizedStops, shouldFocus);
+        document.getElementById('optimizedDistance').innerText = getRouteDistanceText(result.route);
+        document.getElementById('optimizedDuration').innerText = getRouteDurationText(result.route);
+        document.getElementById('optimizedDistanceHelp').innerText = 'Road distance from Google Maps.';
+        document.getElementById('optimizedDurationHelp').innerText = 'Estimated drive time with current traffic.';
+        const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+        const message = [
+            usedAi ? 'AI recommended this road route.' : 'AI is unavailable. ColdTrace selected a road route using its calculated scores.',
+            recommendation.reason,
+            recommendation.driver_action,
+            recommendation.cold_chain_warning,
+            ...warnings,
+            optimizedStops.length > 4
+                ? 'Google Maps opens the first delivery for this longer route. Complete that delivery, then optimize the remaining orders.'
+                : 'Open Google Maps to start navigation. Google Maps may adjust the road path.',
+        ].filter(value => typeof value === 'string' && value.trim());
+        const needsAttention = !usedAi || warnings.length > 0 || ['warning', 'critical'].includes(recommendation.risk_level);
+        setRouteBadge(usedAi ? 'AI recommended' : 'Road route ready', needsAttention ? 'warning' : 'success');
+        setRouteMessage([...new Set(message)].map(escapeHtml).join(' '), needsAttention ? 'warning' : 'success');
     }
 
     function renderStopList(stops, meta) {
@@ -1070,6 +911,8 @@
             if (!button) {
                 return;
             }
+            const label = button.querySelector('[data-maps-label]');
+            if (label) label.innerText = url && optimizedStops.length > 4 ? 'Navigate first stop' : 'Open Google Maps';
 
             if (!url) {
                 button.setAttribute('href', '#');
@@ -1086,6 +929,11 @@
         if (!stops.length) {
             return null;
         }
+
+        // Mobile Google Maps URLs support three intermediate waypoints.
+        // For larger plans, explicitly navigate the first stop instead of
+        // sending a URL whose additional deliveries could be dropped.
+        if (stops.length > 4) stops = stops.slice(0, 1);
 
         const destination = stops[stops.length - 1];
         const waypoints = stops.slice(0, -1)
@@ -1249,12 +1097,8 @@
 
         updateRouteNumbersOnMap(optimizedStops);
 
-        if (lastRouteResult) {
-            if (lastRouteResult.route) {
-                drawRoutesApiPolyline(lastRouteResult.route, lastRouteResult.orderedStops, false);
-            } else {
-                drawStraightLineRoute(lastRouteResult.orderedStops, false);
-            }
+        if (lastRouteResult?.route) {
+            drawRoutesApiPolyline(lastRouteResult.route, lastRouteResult.orderedStops, false);
         }
 
         fitDriverRouteMap();
@@ -1385,7 +1229,6 @@
 
     function drawRoutesApiPolyline(route, orderedStops, shouldFocus) {
         if (!driverOrdersRouteMap || !window.google || !google.maps || !route?.polyline?.encodedPolyline) {
-            drawStraightLineRoute(orderedStops, shouldFocus);
             return;
         }
 
@@ -1405,41 +1248,6 @@
 
         if (shouldFocus) {
             fitPolylineBounds(decodedPath);
-        }
-    }
-
-    function drawStraightLineRoute(orderedStops, shouldFocus) {
-        if (!driverOrdersRouteMap || !window.google || !google.maps) {
-            return;
-        }
-
-        if (routePolyline) {
-            routePolyline.setMap(null);
-        }
-
-        const path = [];
-
-        if (latestCurrentPosition) {
-            path.push(latestCurrentPosition);
-        }
-
-        orderedStops.forEach(function (stop) {
-            path.push({
-                lat: Number(stop.lat),
-                lng: Number(stop.lng),
-            });
-        });
-
-        routePolyline = new google.maps.Polyline({
-            path: path,
-            geodesic: true,
-            strokeOpacity: 0.85,
-            strokeWeight: 5,
-            map: driverOrdersRouteMap,
-        });
-
-        if (shouldFocus) {
-            fitPolylineBounds(path);
         }
     }
 

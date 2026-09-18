@@ -6,15 +6,19 @@ use App\Http\Controllers\Controller;
 use App\Models\Device;
 use App\Models\Order;
 use App\Models\Trip;
+use App\Services\ColdChain\DriverRouteOptimizationService;
+use App\Services\ColdChain\RouteOptimizationUnavailable;
 use App\Services\ColdChain\RouteRecommendationScoringService;
 use App\Services\ColdChain\SimulatedTemperatureService;
 use App\Services\ColdChain\TelemetryProcessingService;
 use App\Services\ColdChain\TemperatureStatusService;
 use App\Services\OpenAIRouteRecommendationService;
+use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Validation\ValidationException;
 
 class OrderController extends Controller
 {
@@ -156,6 +160,44 @@ class OrderController extends Controller
             'mqttUsername',
             'mqttPassword'
         ));
+    }
+
+    public function optimize(Request $request, DriverRouteOptimizationService $optimizer): JsonResponse
+    {
+        $this->authorizeDriver();
+        abort_unless(Auth::user()->status === 'active', 403, 'This driver account is inactive.');
+
+        $validated = $request->validate([
+            'origin' => ['required', 'array:lat,lng,recorded_at'],
+            'origin.lat' => ['required', 'numeric', 'between:-90,90'],
+            'origin.lng' => ['required', 'numeric', 'between:-180,180'],
+            'origin.recorded_at' => ['required', 'date'],
+        ]);
+        $origin = $validated['origin'];
+        $age = CarbonImmutable::parse($origin['recorded_at'])->diffInSeconds(now(), false);
+        if (! is_finite((float) $origin['lat']) || ! is_finite((float) $origin['lng'])
+            || ((float) $origin['lat'] === 0.0 && (float) $origin['lng'] === 0.0)
+            || $age < -30 || $age >= (int) config('coldtrace.gps_timeout_seconds', 30)) {
+            throw ValidationException::withMessages(['origin' => 'A fresh, valid truck or browser GPS location is required. Wait for a new location update and try again.']);
+        }
+
+        $driverId = (int) Auth::id();
+        if ($this->getNavigableOrdersMissingCoordinates($driverId)->isNotEmpty()) {
+            throw ValidationException::withMessages(['orders' => 'Some active deliveries have no map location. Ask the administrator to add their delivery locations before planning all orders.']);
+        }
+        $orders = $this->getNavigableOrdersForDriver($driverId);
+
+        try {
+            $result = $optimizer->optimize($origin, $orders, $this->buildRouteStops($orders), $driverId);
+        } catch (RouteOptimizationUnavailable $exception) {
+            return response()->json([
+                'success' => false,
+                'message' => $exception->getMessage(),
+                'code' => $exception->reason,
+            ], 503)->header('Cache-Control', 'no-store');
+        }
+
+        return response()->json(['success' => true, 'result' => $result])->header('Cache-Control', 'no-store');
     }
 
     public function show(

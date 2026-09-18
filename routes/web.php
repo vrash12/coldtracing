@@ -78,6 +78,10 @@ Route::middleware('auth')->group(function () {
             Route::get('/orders', [DriverOrderController::class, 'index'])
                 ->name('orders.index');
 
+            Route::post('/orders/optimize', [DriverOrderController::class, 'optimize'])
+                ->middleware('throttle:10,1')
+                ->name('orders.optimize');
+
             Route::post('/telemetry/software-feed', [DriverOrderController::class, 'simulateTelemetry'])
                 ->name('telemetry.software-feed');
 

@@ -856,9 +856,11 @@
     let alternateRoutePolylines = [];
     let latestScoredRoutes = [];
     let selectedRouteOriginalIndex = null;
+    let recommendedRouteOriginalIndex = null;
     let AdvancedMarkerElementClass = null;
     let latestCurrentPosition = null;
     let routeRequestVersion = 0;
+    let aiRecommendationRequestVersion = 0;
 
     function clearCurrentGpsMarker() {
         if (!latestCurrentPosition && !currentTruckMarker) return;
@@ -869,6 +871,7 @@
         clearRoutePolylines();
         latestScoredRoutes = [];
         selectedRouteOriginalIndex = null;
+        recommendedRouteOriginalIndex = null;
         updateRoutePanelEmpty('Waiting for live GPS', 'Routing resumes when a fresh location arrives.');
         updateEtaPanel(null);
         updateAiPanel(null, null, null);
@@ -1024,6 +1027,9 @@ function createMarkerContent(type) {
 
     async function calculateInternalRoute(shouldFocus) {
         const requestVersion = ++routeRequestVersion;
+        latestScoredRoutes = [];
+        selectedRouteOriginalIndex = null;
+        recommendedRouteOriginalIndex = null;
         if (!ColdTraceLocation.fresh(detailGpsRecordedAt)) clearCurrentGpsMarker();
         const origin = latestCurrentPosition;
         const destination = initialDeliveryPosition;
@@ -1061,6 +1067,7 @@ function createMarkerContent(type) {
 
             latestScoredRoutes = scoredRoutes;
             selectedRouteOriginalIndex = scoredRoutes[0].originalIndex;
+            recommendedRouteOriginalIndex = selectedRouteOriginalIndex;
 
             const selectedRoute = scoredRoutes[0].route;
 
@@ -1560,12 +1567,32 @@ function createMarkerContent(type) {
     }
 
     async function requestOpenAiRouteRecommendation(scoredRoutes) {
+        const aiRequestVersion = ++aiRecommendationRequestVersion;
+        if (!latestCurrentPosition || !ColdTraceLocation.fresh(detailGpsRecordedAt)) {
+            clearCurrentGpsMarker();
+            setAiBadge('Waiting for live GPS', 'warning');
+            setAiText('aiRecommendedAction', 'Wait for a fresh truck location before requesting a route.');
+            return;
+        }
+
         if (!Array.isArray(scoredRoutes) || scoredRoutes.length === 0) {
             setAiBadge('No route', 'warning');
             setAiText('aiRecommendedAction', 'Start navigation first before asking AI.');
             setAiText('aiReason', 'ColdTrace needs route options before OpenAI can analyze the delivery risk.');
             return;
         }
+
+        // route_1, route_2, etc. refer to this request's sorted options, not
+        // Google's original route indexes or a later set of routes.
+        const routeSnapshot = [...scoredRoutes];
+        const requestVersion = routeRequestVersion;
+        const payload = buildAiRoutePayload(routeSnapshot);
+        const requestIsCurrent = () => aiRequestVersion === aiRecommendationRequestVersion
+            && requestVersion === routeRequestVersion
+            && latestCurrentPosition
+            && ColdTraceLocation.fresh(detailGpsRecordedAt)
+            && routeSnapshot.length === latestScoredRoutes.length
+            && routeSnapshot.every((route, index) => route === latestScoredRoutes[index]);
 
         setAiBadge('AI analyzing...', 'warning');
         setAiText('aiRecommendedAction', 'OpenAI is reviewing the route score and cargo risk.');
@@ -1579,32 +1606,45 @@ function createMarkerContent(type) {
                     'Accept': 'application/json',
                     'X-CSRF-TOKEN': csrfToken,
                 },
-                body: JSON.stringify(buildAiRoutePayload(scoredRoutes)),
+                body: JSON.stringify(payload),
             });
 
             const result = await response.json();
+            if (!requestIsCurrent()) return;
 
             if (!response.ok || !result.success) {
                 throw new Error(result.message || 'AI recommendation failed.');
             }
 
-            applyOpenAiRouteRecommendation(result.recommendation);
+            if (!applyOpenAiRouteRecommendation(result.recommendation, routeSnapshot)) {
+                throw new Error('The recommendation did not match an available route.');
+            }
         } catch (error) {
+            if (!requestIsCurrent()) return;
             console.error('OpenAI route recommendation error:', error);
 
-            setAiBadge('Weighted score used', 'warning');
-            setAiText('aiRecommendedAction', 'Proceed using the lowest ColdTrace route score.');
-            setAiText('aiReason', 'AI explanation is temporarily unavailable. The weighted scoring rule is still active.');
+            setAiBadge('Rule-based route', 'warning');
+            setAiText('aiRecommendedAction', 'Continue with the selected route.');
+            setAiText('aiReason', 'AI recommendation is unavailable. The route remains based on ColdTrace scores.');
             setAiText('aiRiskReason', 'Continue monitoring cargo temperature and RSL.');
         }
     }
 
-    function applyOpenAiRouteRecommendation(recommendation) {
-        if (!recommendation) {
-            return;
+    function applyOpenAiRouteRecommendation(recommendation, routeSnapshot = latestScoredRoutes) {
+        if (!recommendation || !latestCurrentPosition || !ColdTraceLocation.fresh(detailGpsRecordedAt)) {
+            return false;
         }
 
-        const riskLevel = recommendation.risk_level || 'warning';
+        const recommendedRoute = routeSnapshot.find((route, index) =>
+            recommendation.recommended_route_id === 'route_' + (index + 1));
+        if (!recommendedRoute || !latestScoredRoutes.includes(recommendedRoute)) return false;
+
+        recommendedRouteOriginalIndex = recommendedRoute.originalIndex;
+        if (!selectRouteOption(recommendedRoute.originalIndex, { fromRecommendation: true })) return false;
+
+        const isAiRecommendation = recommendation.decision_source === 'openai';
+        const riskLevel = ['safe', 'warning', 'critical'].includes(recommendation.risk_level)
+            ? recommendation.risk_level : 'warning';
         const riskCard = document.querySelector('.risk-card');
 
         if (riskCard) {
@@ -1619,7 +1659,7 @@ function createMarkerContent(type) {
             }
         }
 
-        setAiBadge('AI: ' + String(riskLevel).toUpperCase(), riskLevel);
+        setAiBadge((isAiRecommendation ? 'AI: ' : 'Rule-based: ') + riskLevel.toUpperCase(), riskLevel);
 
         setAiText(
             'aiRecommendedAction',
@@ -1628,7 +1668,9 @@ function createMarkerContent(type) {
 
         setAiText(
             'aiReason',
-            recommendation.reason || 'ColdTrace AI analyzed ETA, distance, temperature risk, and RSL risk.'
+            isAiRecommendation
+                ? (recommendation.reason || 'AI selected this route from the available road routes and cargo conditions.')
+                : 'AI recommendation is unavailable. ColdTrace selected this route using its calculated delivery and cargo-risk scores.'
         );
 
         setAiText(
@@ -1640,6 +1682,7 @@ function createMarkerContent(type) {
             'aiRiskReason',
             recommendation.cold_chain_warning || 'Continue monitoring cargo temperature and remaining shelf life.'
         );
+        return true;
     }
 
     function chooseBestRoute(routes) {
@@ -1664,7 +1707,8 @@ function createMarkerContent(type) {
         const routeCards = topRoutes.map(function (item, index) {
             const route = item.route;
             const isSelected = Number(item.originalIndex) === Number(selectedOriginalIndex);
-            const title = index === 0 ? 'Recommended Route' : 'Alternate Route';
+            const title = Number(item.originalIndex) === Number(recommendedRouteOriginalIndex)
+                ? 'Recommended Route' : 'Alternate Route';
             const riskLabel = item.risk?.label || 'Unknown';
             const algorithmScore = Number(item.score).toFixed(3);
 
@@ -1687,15 +1731,21 @@ function createMarkerContent(type) {
         container.innerHTML = routeCards + routeNote;
     }
 
-    function selectRouteOption(originalIndex) {
+    function selectRouteOption(originalIndex, { fromRecommendation = false } = {}) {
+        if (!latestCurrentPosition || !ColdTraceLocation.fresh(detailGpsRecordedAt)) {
+            clearCurrentGpsMarker();
+            return false;
+        }
+
         const selectedRoute = latestScoredRoutes.find(function (item) {
             return Number(item.originalIndex) === Number(originalIndex);
         });
 
         if (!selectedRoute) {
-            return;
+            return false;
         }
 
+        if (!fromRecommendation) aiRecommendationRequestVersion++;
         selectedRouteOriginalIndex = selectedRoute.originalIndex;
 
         drawAllRoutePolylines(latestScoredRoutes, selectedRouteOriginalIndex);
@@ -1708,6 +1758,7 @@ function createMarkerContent(type) {
         });
 
         updateAiPanel(selectedRoute.route, displayIndex, latestScoredRoutes.length, selectedRoute);
+        return true;
     }
 
     function openRouteScoreModal() {
@@ -1751,7 +1802,7 @@ function createMarkerContent(type) {
         }
 
         tbody.innerHTML = latestScoredRoutes.map(function (item, index) {
-            const isRecommended = index === 0;
+            const isRecommended = Number(item.originalIndex) === Number(recommendedRouteOriginalIndex);
             const route = item.route;
             const tempRiskLabel = item.tempRisk?.label || 'Unknown';
             const rslRiskLabel = item.rslRisk?.label || 'Unknown';

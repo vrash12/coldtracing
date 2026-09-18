@@ -37,6 +37,8 @@ return [
 
     'google_maps' => [
         'key' => env('GOOGLE_MAPS_API_KEY'),
+        // Optional server key for Routes API; never included in browser views.
+        'routes_key' => env('GOOGLE_ROUTES_API_KEY'),
     ],
 
     'hivemq' => [
