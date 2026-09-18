@@ -17,6 +17,7 @@ function render(script, values = {}) {
 }
 function environment(page, overrides = {}) {
     let now = Date.now(), data = null;
+    const speech = {parts:[], clear(){this.parts=[];}, setRecommendation(parts,current){this.parts=parts;this.current=current;}};
     const elements = new Map(), timers = [], events = {};
     const element = () => ({textContent:'', innerText:'', innerHTML:'', style:{}, dataset:{},
         classList:{add(){},remove(){},toggle(){},contains(){return false;}},
@@ -26,6 +27,7 @@ function environment(page, overrides = {}) {
     document.getElementById('driverOrderPage').dataset.telemetryUrl='/latest';
     class Marker {constructor(options){Object.assign(this, options);}}
     const c=vm.createContext({document, console, Map, URL, Intl, AbortController,
+        ColdTraceSpeech:speech,
         Date:class extends Date {static now(){return now;}},
         setInterval(fn){timers.push(fn);return timers.length;}, clearInterval(){}, setTimeout, clearTimeout,
         addEventListener(){}, dispatchEvent(){}, CustomEvent:class {}, navigator:{},
@@ -40,7 +42,7 @@ function environment(page, overrides = {}) {
     c.Marker=Marker;
     if(page==='index') run('driverOrdersRouteMap={}; AdvancedMarkerElementClass=Marker;');
     else run('coldTraceMap={}; AdvancedMarkerElementClass=Marker;');
-    return {run, elements, timers, advance:ms=>now+=ms, setData:value=>data=value, setFetch:fn=>c.fetch=fn,
+    return {run, elements, timers, speech, advance:ms=>now+=ms, setData:value=>data=value, setFetch:fn=>c.fetch=fn,
         poll:async()=>{await timers[1]();}};
 }
 const packet="{device_code:'ESP32-CT-1004', gps_valid:true, latitude:14.7, longitude:121.2, satellites:8, hdop:1}";
@@ -124,6 +126,10 @@ test('all-orders button posts only fresh origin and displays the actual AI-selec
     assert.equal(e.elements.get('routeSequenceTitle').innerText,'AI recommended sequence');
     assert.match(e.elements.get('routeMessage').innerHTML,/&lt;script&gt;/);
     assert.equal(e.run('optimizationController'),null);
+    assert.ok(e.speech.parts.includes('Protect cargo <script>alert(1)</script>'));
+    assert.equal(e.speech.current(),true);
+    e.advance(30000); e.timers[0]();
+    assert.equal(e.speech.parts.length,0);
 });
 
 test('Google configuration failure clears previous routes without inventing a replacement path',async()=>{
@@ -139,6 +145,7 @@ test('Google configuration failure clears previous routes without inventing a re
     assert.equal(e.elements.get('routeMessage').innerHTML,'Enable Google Routes API.');
     assert.equal(e.elements.get('optimizedDistance').innerText,'—');
     assert.ok(e.run('currentTruckMarker'));
+    assert.equal(e.speech.parts.length,0);
 });
 
 test('a valid road route with unavailable AI is labelled as an automatic recommendation',async()=>{

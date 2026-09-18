@@ -22,6 +22,7 @@ function pageScript() {
 
 function environment() {
     const elements = new Map(), requests = [];
+    const speech = { parts: [], clear() { this.parts = []; }, setRecommendation(parts, current) { this.parts = parts; this.current = current; } };
     let fresh = true;
     const element = () => ({ innerText: '', innerHTML: '',
         classList: { add() {}, remove() {} }, appendChild() {} });
@@ -31,6 +32,7 @@ function environment() {
     };
     const context = vm.createContext({
         console: { error() {} },
+        ColdTraceSpeech: speech,
         document: { getElementById: getElement, querySelector: getElement,
             addEventListener() {}, createElement: element },
         ColdTraceLocation: { fresh: () => fresh }, detailGpsRecordedAt: Date.now(),
@@ -57,7 +59,7 @@ function environment() {
         recommendedRouteOriginalIndex = 9;
         selectRouteOption(9);
     `);
-    return { run, requests, elements, getElement, expire: () => { fresh = false; } };
+    return { run, requests, elements, getElement, speech, expire: () => { fresh = false; } };
 }
 
 const recommendation = source => ({ recommended_route_id: 'route_2', decision_source: source,
@@ -78,6 +80,8 @@ test('AI route ids use the sent sorted options and update the route, ETA, and re
     assert.equal(e.getElement('aiRecommendationBadge').innerText, 'AI: WARNING');
     assert.match(e.getElement('alternateRouteList').innerHTML, /Recommended Route 2/);
     assert.equal(e.requests.length, 1, 'applying the chosen route must not request AI again');
+    assert.deepEqual(Array.from(e.speech.parts), ['AI route recommendation.', 'Take the second route.', 'Protect the cargo.', 'Monitor the cargo temperature.']);
+    assert.equal(e.speech.current(), true);
 });
 
 test('server fallback applies its selected route and is clearly labeled rule-based', async () => {
@@ -88,6 +92,7 @@ test('server fallback applies its selected route and is clearly labeled rule-bas
     assert.equal(e.run('selectedRouteOriginalIndex'), 2);
     assert.equal(e.getElement('aiRecommendationBadge').innerText, 'Rule-based: WARNING');
     assert.match(e.getElement('aiReason').innerText, /AI recommendation is unavailable/);
+    assert.equal(e.speech.parts[0], 'ColdTrace automatic route recommendation.');
 });
 
 for (const change of ['route recalculation', 'GPS expiry', 'manual route selection']) {
@@ -103,6 +108,7 @@ for (const change of ['route recalculation', 'GPS expiry', 'manual route selecti
         await pending;
         assert.equal(e.run('selectedRouteOriginalIndex'), selected);
         assert.equal(e.getElement('aiRecommendationBadge').innerText, badge);
+        if (change === 'GPS expiry') assert.equal(e.speech.parts.length, 0);
     });
 }
 

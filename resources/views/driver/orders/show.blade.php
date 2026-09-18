@@ -317,6 +317,8 @@
             </div>
         </div>
 
+        <x-route-speech />
+
         <div class="ai-grid" id="aiRouteAnalysisContent">
             <div class="ai-card">
                 <span>Recommended Action</span>
@@ -1026,6 +1028,7 @@ function createMarkerContent(type) {
     }
 
     async function calculateInternalRoute(shouldFocus) {
+        window.ColdTraceSpeech?.clear();
         const requestVersion = ++routeRequestVersion;
         latestScoredRoutes = [];
         selectedRouteOriginalIndex = null;
@@ -1567,6 +1570,7 @@ function createMarkerContent(type) {
     }
 
     async function requestOpenAiRouteRecommendation(scoredRoutes) {
+        window.ColdTraceSpeech?.clear('Waiting for the updated AI recommendation.');
         const aiRequestVersion = ++aiRecommendationRequestVersion;
         if (!latestCurrentPosition || !ColdTraceLocation.fresh(detailGpsRecordedAt)) {
             clearCurrentGpsMarker();
@@ -1627,6 +1631,7 @@ function createMarkerContent(type) {
             setAiText('aiRecommendedAction', 'Continue with the selected route.');
             setAiText('aiReason', 'AI recommendation is unavailable. The route remains based on ColdTrace scores.');
             setAiText('aiRiskReason', 'Continue monitoring cargo temperature and RSL.');
+            updateSpokenRecommendation(false);
         }
     }
 
@@ -1682,7 +1687,17 @@ function createMarkerContent(type) {
             'aiRiskReason',
             recommendation.cold_chain_warning || 'Continue monitoring cargo temperature and remaining shelf life.'
         );
+        updateSpokenRecommendation(isAiRecommendation);
         return true;
+    }
+
+    function updateSpokenRecommendation(isAiRecommendation = false) {
+        window.ColdTraceSpeech?.setRecommendation([
+            isAiRecommendation ? 'AI route recommendation.' : 'ColdTrace automatic route recommendation.',
+            document.getElementById('aiRecommendedAction')?.innerText,
+            document.getElementById('aiReason')?.innerText,
+            document.getElementById('aiRiskReason')?.innerText,
+        ], () => !!latestCurrentPosition && latestScoredRoutes.length > 0 && ColdTraceLocation.fresh(detailGpsRecordedAt));
     }
 
     function chooseBestRoute(routes) {
@@ -2050,6 +2065,7 @@ function createMarkerContent(type) {
     }
 
     function updateAiPanel(route, routeIndex, routeCount, scoredRoute = null) {
+        if (!route) window.ColdTraceSpeech?.clear();
         const badge = document.getElementById('aiRecommendationBadge');
         const action = document.getElementById('aiRecommendedAction');
         const reason = document.getElementById('aiReason');
@@ -2109,6 +2125,7 @@ function createMarkerContent(type) {
         etaTime.innerText = 'Estimated arrival: ' + getArrivalTimeText(route);
         risk.innerText = finalRisk.label;
         riskReason.innerText = finalRisk.reason;
+        updateSpokenRecommendation(false);
     }
 
     window.initDriverOrderMap = initDriverOrderMap;

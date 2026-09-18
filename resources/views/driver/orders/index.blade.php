@@ -136,6 +136,8 @@
             Press <strong>Optimize All Orders</strong> to calculate the best sequence for all active assigned deliveries.
         </div>
 
+        <x-route-speech />
+
         <div class="route-layout">
             <div class="map-card">
                 <div class="map-toolbar">
@@ -720,6 +722,7 @@
     }
 
     function clearOptimizedRoute() {
+        window.ColdTraceSpeech?.clear();
         routePolyline?.setMap(null);
         routePolyline = null;
         routeHasBeenOptimized = false;
@@ -841,6 +844,8 @@
         const needsAttention = !usedAi || warnings.length > 0 || ['warning', 'critical'].includes(recommendation.risk_level);
         setRouteBadge(usedAi ? 'AI recommended' : 'Road route ready', needsAttention ? 'warning' : 'success');
         setRouteMessage([...new Set(message)].map(escapeHtml).join(' '), needsAttention ? 'warning' : 'success');
+        window.ColdTraceSpeech?.setRecommendation(message, () =>
+            routeHasBeenOptimized && !!latestCurrentPosition && ColdTraceLocation.fresh(currentGpsRecordedAt));
     }
 
     function renderStopList(stops, meta) {
